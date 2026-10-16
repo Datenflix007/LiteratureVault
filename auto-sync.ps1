@@ -1,232 +1,54 @@
 #!/usr/bin/env powershell
 param(
-    [string]$WatchPath = ".\data",
-    [int]$IntervalSeconds = 5,
-    [int]$DebounceSeconds = 10,
-    [switch]$Push
+    [string]$WatchPath = "",
+    [int]$IntervalSeconds = 5
 )
 
+# This is intentionally only an activity monitor. The OneDrive/Nextcloud/Dropbox
+# desktop client performs the actual cloud sync; Zotero files are never added to Git.
 $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
-Set-Location $ScriptDir
-
 $script:LogFile = Join-Path $ScriptDir ".sync-log.json"
 
-function Write-Log($Text, $Color = "Gray") {
+function Write-Log($Text, $Level = "info") {
     $timestamp = Get-Date -Format "HH:mm:ss"
-    Write-Host "[$timestamp] $Text" -ForegroundColor $Color
-
-    $level = switch ($Color) {
-        "Green"  { "ok" }
-        "Yellow" { "warn" }
-        "Red"    { "error" }
-        "Cyan"   { "info" }
-        default  { "info" }
-    }
-
+    Write-Host "[$timestamp] $Text"
     try {
         $entries = @()
-        if (Test-Path $script:LogFile) {
-            $raw = Get-Content $script:LogFile -Raw -ErrorAction SilentlyContinue
-            if ($raw) {
-                $parsed = $raw | ConvertFrom-Json
-                $entries = @($parsed)
-            }
-        }
-        $entries += [PSCustomObject]@{ ts = (Get-Date -Format "o"); level = $level; text = $Text }
+        if (Test-Path $script:LogFile) { $entries = @(Get-Content $script:LogFile -Raw -Encoding UTF8 | ConvertFrom-Json) }
+        $entries += [PSCustomObject]@{ ts = (Get-Date).ToString("o"); level = $Level; text = $Text }
         if ($entries.Count -gt 300) { $entries = $entries[($entries.Count - 300)..($entries.Count - 1)] }
-        $entries | ConvertTo-Json -Depth 5 | Out-File $script:LogFile -Encoding UTF8 -Force
+        $entries | ConvertTo-Json -Depth 4 | Set-Content $script:LogFile -Encoding UTF8
     } catch { }
 }
 
-function Import-LocalEnv {
-    if (-not (Test-Path ".env.local")) {
-        return
-    }
-
-    Get-Content ".env.local" | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
-            $key, $value = $line.Split("=", 2)
-            [Environment]::SetEnvironmentVariable($key.Trim(), $value.Trim(), "Process")
+function Get-ConfiguredStoragePath {
+    if (Test-Path (Join-Path $ScriptDir ".env.local")) {
+        Get-Content (Join-Path $ScriptDir ".env.local") -Encoding UTF8 | ForEach-Object {
+            if ($_.Trim() -match '^ZOTERO_STORAGE_PATH=(.*)$') { $script:configuredPath = $matches[1].Trim() }
         }
     }
+    if ([string]::IsNullOrWhiteSpace($script:configuredPath)) { return (Join-Path $ScriptDir "data") }
+    if ([IO.Path]::IsPathRooted($script:configuredPath)) { return $script:configuredPath }
+    return (Join-Path $ScriptDir $script:configuredPath)
 }
 
-function Ensure-GitIdentity {
-    $name = git config user.name
-    $email = git config user.email
+if ([string]::IsNullOrWhiteSpace($WatchPath)) { $WatchPath = Get-ConfiguredStoragePath }
+if (-not (Test-Path -LiteralPath $WatchPath)) { New-Item -ItemType Directory -Path $WatchPath -Force | Out-Null }
+$WatchPath = (Resolve-Path -LiteralPath $WatchPath).Path
 
-    if ([string]::IsNullOrWhiteSpace($name) -and $env:GITHUB_USERNAME) {
-        git config user.name "$env:GITHUB_USERNAME" | Out-Null
-    }
-    if ([string]::IsNullOrWhiteSpace($email) -and $env:GITHUB_EMAIL) {
-        git config user.email "$env:GITHUB_EMAIL" | Out-Null
-    }
-}
-
-function Push-CurrentBranch {
-    if (-not $Push) {
-        return
-    }
-
-    if ($env:GITHUB_TOKEN) {
-        $basicAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$($env:GITHUB_TOKEN)"))
-        git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basicAuth" push
-    }
-    else {
-        git push
-    }
-    if ($LASTEXITCODE -eq 0) {
-        Write-Log "Push zu GitHub erfolgreich." "Green"
-        return
-    }
-
-    Write-Log "Normaler Push fehlgeschlagen, versuche Upstream fuer aktuellen Branch zu setzen..." "Yellow"
-    if ($env:GITHUB_TOKEN) {
-        $basicAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$($env:GITHUB_TOKEN)"))
-        git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basicAuth" push -u origin HEAD
-    }
-    else {
-        git push -u origin HEAD
-    }
-
-    if ($LASTEXITCODE -eq 0) {
-        Write-Log "Push zu GitHub erfolgreich." "Green"
-    }
-    else {
-        Write-Log "Push fehlgeschlagen. GitHub-Anmeldung oder Remote pruefen." "Red"
-    }
-}
-
-function Invoke-GitRemote {
-    param([string[]]$GitArgs)
-    if ($env:GITHUB_TOKEN) {
-        $basicAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$($env:GITHUB_TOKEN)"))
-        & git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basicAuth" @GitArgs
-    }
-    else {
-        & git @GitArgs
-    }
-}
-
-function Test-BranchHasUnpushedCommits {
-    $branchStatus = git status -sb
-    return ($branchStatus -match "\[ahead [0-9]+")
-}
-
-function Pull-RemoteUpdates {
-    Write-Log "Pruefe GitHub auf neuere Commits..." "Cyan"
-    Invoke-GitRemote @("fetch", "--prune")
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log "Fetch fehlgeschlagen. Arbeite lokal weiter." "Yellow"
-        return
-    }
-
-    $status = git status --porcelain
-    if (-not [string]::IsNullOrWhiteSpace($status)) {
-        Write-Log "Pull uebersprungen, weil lokale Aenderungen vorhanden sind." "Yellow"
-        return
-    }
-
-    Invoke-GitRemote @("pull", "--ff-only")
-    if ($LASTEXITCODE -eq 0) {
-        Write-Log "Remote-Stand ist aktuell oder wurde gepulled." "Green"
-    }
-    else {
-        Write-Log "Pull fehlgeschlagen. Bitte Git-Status pruefen." "Red"
-    }
-}
-
-function Get-RelativeWatchPath {
-    param([string]$FullPath)
-
-    $root = (Resolve-Path $ScriptDir).Path.TrimEnd("\", "/")
-    $resolved = (Resolve-Path $FullPath).Path.TrimEnd("\", "/")
-    if ($resolved.StartsWith($root)) {
-        return $resolved.Substring($root.Length).TrimStart("\", "/")
-    }
-    return $FullPath
-}
-
-function Sync-Changes {
-    param([string]$RelativePath)
-
-    $status = git status --porcelain -- "$RelativePath"
-    if ([string]::IsNullOrWhiteSpace($status)) {
-        return
-    }
-
-    Write-Log "Aenderungen gefunden. Commit wird vorbereitet..." "Yellow"
-    git add -A -- "$RelativePath"
-
-    $staged = git diff --cached --quiet -- "$RelativePath"
-    if ($LASTEXITCODE -eq 0) {
-        Write-Log "Keine commitbaren Aenderungen nach git add." "Gray"
-        return
-    }
-
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    git commit -m "Auto-sync Zotero WebDAV data [$timestamp]"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log "Commit fehlgeschlagen. Bitte Git-Konfiguration pruefen." "Red"
-        return
-    }
-
-    Write-Log "Commit erstellt." "Green"
-
-    Push-CurrentBranch
-}
-
-Import-LocalEnv
-Ensure-GitIdentity
-Pull-RemoteUpdates
-
-$watchFullPath = if ([System.IO.Path]::IsPathRooted($WatchPath)) { $WatchPath } else { Join-Path $ScriptDir $WatchPath }
-if (-not (Test-Path $watchFullPath)) {
-    New-Item -ItemType Directory -Path $watchFullPath -Force | Out-Null
-}
-
-$relativeWatchPath = Get-RelativeWatchPath $watchFullPath
-
-Write-Log "Auto-Sync startet." "Green"
-Write-Log "Ueberwache: $relativeWatchPath" "Cyan"
-Write-Log "Intervall: ${IntervalSeconds}s, Ruhezeit vor Commit: ${DebounceSeconds}s" "Cyan"
-Write-Log "Push nach GitHub: $([bool]$Push)" "Cyan"
-Write-Log "Beenden mit Ctrl+C." "Gray"
-
-$lastStatus = ""
-$lastChangeAt = Get-Date
-$lastPushAttempt = (Get-Date).AddMinutes(-5)
+Write-Log "Speicher-Monitor gestartet. Cloud-Synchronisierung ueber den Desktop-Client; keine Git-Commits fuer Anhaenge." "ok"
+Write-Log "Ueberwache: $WatchPath" "info"
+$lastStamp = (Get-ChildItem -LiteralPath $WatchPath -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object LastWriteTimeUtc -Maximum).Maximum
 
 try {
     while ($true) {
-        $currentStatus = (git status --porcelain -- "$relativeWatchPath") -join "`n"
-
-        if ($currentStatus -ne $lastStatus) {
-            $lastStatus = $currentStatus
-            $lastChangeAt = Get-Date
-            if (-not [string]::IsNullOrWhiteSpace($currentStatus)) {
-                Write-Log "Zotero-Daten wurden geaendert. Warte auf weitere Schreibvorgaenge..." "Cyan"
-            }
-        }
-
-        $idleSeconds = ((Get-Date) - $lastChangeAt).TotalSeconds
-        if (-not [string]::IsNullOrWhiteSpace($currentStatus) -and $idleSeconds -ge $DebounceSeconds) {
-            Sync-Changes -RelativePath $relativeWatchPath
-            $lastStatus = (git status --porcelain -- "$relativeWatchPath") -join "`n"
-            $lastChangeAt = Get-Date
-        }
-        elseif ([string]::IsNullOrWhiteSpace($currentStatus) -and $Push -and ((Get-Date) - $lastPushAttempt).TotalSeconds -ge 60 -and (Test-BranchHasUnpushedCommits)) {
-            Write-Log "Lokale Commits sind noch nicht auf GitHub. Push wird erneut versucht..." "Yellow"
-            $lastPushAttempt = Get-Date
-            Push-CurrentBranch
-            $lastChangeAt = Get-Date
-        }
-
         Start-Sleep -Seconds $IntervalSeconds
+        $currentStamp = (Get-ChildItem -LiteralPath $WatchPath -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object LastWriteTimeUtc -Maximum).Maximum
+        if ($currentStamp -and $currentStamp -ne $lastStamp) {
+            $lastStamp = $currentStamp
+            Write-Log "Dateien im externen Speicher wurden aktualisiert. Der Cloud-Client synchronisiert sie ausserhalb von Git." "info"
+        }
     }
 }
-finally {
-    Write-Log "Auto-Sync beendet." "Yellow"
-}
+finally { Write-Log "Speicher-Monitor beendet." "warn" }

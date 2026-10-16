@@ -24,7 +24,7 @@ function Write-Warn($Text) { Write-Host "[WARN] $Text" -ForegroundColor Yellow }
 function Import-EnvFile {
     $values = [ordered]@{}
     if (-not (Test-Path ".env.local")) { return $values }
-    Get-Content ".env.local" | ForEach-Object {
+    Get-Content ".env.local" -Encoding UTF8 | ForEach-Object {
         $line = $_.Trim()
         if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
             $key, $value = $line.Split("=", 2)
@@ -33,6 +33,21 @@ function Import-EnvFile {
         }
     }
     return $values
+}
+
+function Get-DefaultStoragePath {
+    $oneDriveFolders = @(Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -Filter "OneDrive*" -ErrorAction SilentlyContinue)
+    $oneDrive = @($oneDriveFolders | Where-Object { $_.Name -like "OneDrive - *" } | Select-Object -First 1).FullName
+    if ([string]::IsNullOrWhiteSpace($oneDrive)) { $oneDrive = [Environment]::GetEnvironmentVariable("OneDrive") }
+    if ([string]::IsNullOrWhiteSpace($oneDrive)) { $oneDrive = Join-Path $env:USERPROFILE "OneDrive" }
+    return (Join-Path $oneDrive "MyLiteratureVault")
+}
+
+function Get-StoragePath {
+    $storagePath = "$env:ZOTERO_STORAGE_PATH".Trim()
+    if ([string]::IsNullOrWhiteSpace($storagePath)) { $storagePath = Get-DefaultStoragePath }
+    if (-not [IO.Path]::IsPathRooted($storagePath)) { $storagePath = Join-Path $ScriptDir $storagePath }
+    return [IO.Path]::GetFullPath($storagePath)
 }
 
 function Ensure-EnvFile {
@@ -45,10 +60,28 @@ function Ensure-EnvFile {
     }
 
     $script:FirstRun = $true
-    Write-Host "Erster Start - bitte GitHub-Daten eingeben."
+    Write-Host "Erster Start - GitHub speichert nur den Code, niemals Zotero-Anhaenge."
     $githubUser  = Read-Host "GitHub Benutzername"
     $githubEmail = Read-Host "GitHub E-Mail"
     $githubToken = Read-Host "GitHub Personal Access Token (leer = Git bereits angemeldet)"
+    $providerInput = (Read-Host "Cloud-Anbieter (onedrive, nextcloud, dropbox oder local; Standard: onedrive)").Trim()
+    $provider = $providerInput.ToLowerInvariant()
+    $shareUrl = ""
+    if ($provider -match "^https?://") {
+        $shareUrl = $providerInput
+        $provider = "onedrive"
+        Write-Info "Der eingefuegte Link wird als OneDrive-Freigabelink gespeichert."
+    }
+    if ([string]::IsNullOrWhiteSpace($provider)) { $provider = "onedrive" }
+    if ($provider -notin @("onedrive", "nextcloud", "dropbox", "local")) {
+        Write-Warn "Unbekannter Anbieter '$provider'; verwende onedrive."
+        $provider = "onedrive"
+    }
+    $defaultStoragePath = Get-DefaultStoragePath
+    $storagePath = Read-Host "Lokal synchronisierter Cloud-Ordner (Standard: $defaultStoragePath)"
+    if ([string]::IsNullOrWhiteSpace($storagePath)) { $storagePath = $defaultStoragePath }
+    $shareUrlInput = Read-Host "Optionaler Freigabelink zu diesem Ordner"
+    if (-not [string]::IsNullOrWhiteSpace($shareUrlInput)) { $shareUrl = $shareUrlInput }
 
     $lines = @(
         "# GitHub Configuration",
@@ -59,13 +92,21 @@ function Ensure-EnvFile {
         "# WebDAV Server",
         "WEBDAV_URL=http://localhost:8080",
         "WEBDAV_USERNAME=zotero",
-        "WEBDAV_PASSWORD=changeme123"
+        "WEBDAV_PASSWORD=changeme123",
+        "",
+        "# External attachment storage - synced by the provider desktop app, never Git/LFS",
+        "STORAGE_PROVIDER=$provider",
+        "ZOTERO_STORAGE_PATH=$storagePath",
+        "STORAGE_SHARE_URL=$shareUrl"
     )
     $lines | Out-File -FilePath '.env.local' -Encoding UTF8 -Force
 
     [Environment]::SetEnvironmentVariable("GITHUB_USERNAME", $githubUser,  "Process")
     [Environment]::SetEnvironmentVariable("GITHUB_EMAIL",    $githubEmail, "Process")
     [Environment]::SetEnvironmentVariable("GITHUB_TOKEN",    $githubToken, "Process")
+    [Environment]::SetEnvironmentVariable("STORAGE_PROVIDER", $provider, "Process")
+    [Environment]::SetEnvironmentVariable("ZOTERO_STORAGE_PATH", $storagePath, "Process")
+    [Environment]::SetEnvironmentVariable("STORAGE_SHARE_URL", $shareUrl, "Process")
     if ($githubUser)  { git config user.name  $githubUser  | Out-Null }
     if ($githubEmail) { git config user.email $githubEmail | Out-Null }
     Write-Ok ".env.local erstellt und Git-Benutzer gesetzt"
@@ -213,8 +254,17 @@ function Find-DockerDesktopExe {
 }
 
 function Test-DockerReady {
-    $null = docker info 2>&1
-    return ($LASTEXITCODE -eq 0)
+    # A stopped Docker Desktop daemon is expected during startup. Do not let its
+    # stderr abort the quickstart before we get the chance to launch it.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        $null = & docker info 2>$null
+        return ($LASTEXITCODE -eq 0)
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
 }
 
 function Start-DockerDesktop {
@@ -268,10 +318,12 @@ function Test-WebDavReady {
 function Start-WebDav {
     Write-Step "[6/7] WebDAV Container starten"
 
-    if (-not (Test-Path "data")) {
-        New-Item -ItemType Directory -Path "data" | Out-Null
-        Write-Info "Verzeichnis 'data' erstellt"
-    }
+    $storagePath = Get-StoragePath
+    $env:ZOTERO_STORAGE_PATH = $storagePath
+    if (-not (Test-Path -LiteralPath $storagePath)) { New-Item -ItemType Directory -Path $storagePath -Force | Out-Null }
+    $projectsPath = Join-Path $storagePath "Projekte"
+    if (-not (Test-Path -LiteralPath $projectsPath)) { New-Item -ItemType Directory -Path $projectsPath -Force | Out-Null }
+    Write-Info "Externer Speicher: $storagePath"
 
     $null = docker compose version 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -328,8 +380,7 @@ function Start-AutoSync {
     Start-Process powershell -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", "`"$syncScript`"",
-        "-WatchPath", "`"$ScriptDir\data`"",
-        "-Push"
+        "-WatchPath", "`"$(Get-StoragePath)`""
     ) -WindowStyle Hidden
 
     Write-Ok "Auto-Sync gestartet (Hintergrundprozess)"
@@ -391,7 +442,8 @@ catch {
 Write-Host ""
 Write-Host "Fertig! Alle Dienste laufen." -ForegroundColor Green
 Write-Host ""
-Write-Host "  WebDAV:  http://localhost:8080   Benutzer: zotero   Passwort: changeme123"
+Write-Host "  WebDAV:  http://localhost:8080   Benutzer: zotero   Passwort: siehe .env.local"
+Write-Host "  Speicher: $(Get-StoragePath) (wird nicht in Git/Git LFS gespeichert)"
 Write-Host "  UI:      http://localhost:8765"
 Write-Host ""
 

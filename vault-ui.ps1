@@ -12,7 +12,7 @@ Set-Location $ScriptDir
 function Import-EnvFile {
     $values = [ordered]@{}
     if (-not (Test-Path ".env.local")) { return $values }
-    Get-Content ".env.local" | ForEach-Object {
+    Get-Content ".env.local" -Encoding UTF8 | ForEach-Object {
         $line = $_.Trim()
         if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
             $key, $value = $line.Split("=", 2)
@@ -24,7 +24,7 @@ function Import-EnvFile {
 
 function Save-EnvFile {
     param([hashtable]$Values)
-    $orderedKeys = @("GITHUB_USERNAME", "GITHUB_EMAIL", "GITHUB_TOKEN", "WEBDAV_URL", "WEBDAV_USERNAME", "WEBDAV_PASSWORD")
+    $orderedKeys = @("GITHUB_USERNAME", "GITHUB_EMAIL", "GITHUB_TOKEN", "WEBDAV_URL", "WEBDAV_USERNAME", "WEBDAV_PASSWORD", "STORAGE_PROVIDER", "ZOTERO_STORAGE_PATH", "STORAGE_SHARE_URL")
     $lines = @("# GitHub Configuration")
     foreach ($key in @("GITHUB_USERNAME", "GITHUB_EMAIL", "GITHUB_TOKEN")) {
         $lines += "$key=$($Values[$key])"
@@ -34,12 +34,122 @@ function Save-EnvFile {
     foreach ($key in @("WEBDAV_URL", "WEBDAV_USERNAME", "WEBDAV_PASSWORD")) {
         $lines += "$key=$($Values[$key])"
     }
+    $lines += ""
+    $lines += "# External attachment storage (the desktop sync client writes this folder to the cloud)"
+    foreach ($key in @("STORAGE_PROVIDER", "ZOTERO_STORAGE_PATH", "STORAGE_SHARE_URL")) {
+        $lines += "$key=$($Values[$key])"
+    }
     foreach ($key in $Values.Keys) {
         if ($orderedKeys -notcontains $key) {
             $lines += "$key=$($Values[$key])"
         }
     }
     $lines | Out-File ".env.local" -Encoding UTF8 -Force
+}
+
+function Get-StoragePath {
+    param([hashtable]$EnvValues = (Import-EnvFile))
+    $path = "$($EnvValues["ZOTERO_STORAGE_PATH"])".Trim()
+    if ([string]::IsNullOrWhiteSpace($path)) { $path = Join-Path $ScriptDir "data" }
+    if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $ScriptDir $path }
+    return [IO.Path]::GetFullPath($path)
+}
+
+function Ensure-StorageRoot {
+    param([hashtable]$EnvValues = (Import-EnvFile))
+    $path = Get-StoragePath $EnvValues
+    if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
+    $projectsPath = Join-Path $path "Projekte"
+    if (-not (Test-Path -LiteralPath $projectsPath)) { New-Item -ItemType Directory -Path $projectsPath -Force | Out-Null }
+    return $path
+}
+
+function Get-ProjectStorePath {
+    $root = Ensure-StorageRoot
+    return Join-Path (Join-Path $root "Projekte") ".myliteraturevault-projects.json"
+}
+
+function Get-ProjectStore {
+    $storePath = Get-ProjectStorePath
+    if (-not (Test-Path -LiteralPath $storePath)) { return [PSCustomObject]@{ version = 1; projects = @() } }
+    try {
+        $store = Get-Content -LiteralPath $storePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -eq $store.projects) { $store | Add-Member -NotePropertyName projects -NotePropertyValue @() }
+        return $store
+    } catch {
+        throw "Projektdatei kann nicht gelesen werden: $($_.Exception.Message)"
+    }
+}
+
+function Save-ProjectStore {
+    param($Store)
+    $storePath = Get-ProjectStorePath
+    $Store | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $storePath -Encoding UTF8
+}
+
+function Get-SafeFolderName {
+    param([string]$Name)
+    $safe = ($Name -replace '[\\/:*?""<>|]', '-').Trim().TrimEnd('.')
+    if ([string]::IsNullOrWhiteSpace($safe)) { throw "Bitte einen gueltigen Projektnamen eingeben." }
+    return $safe
+}
+
+function Get-ProjectSummary {
+    param($Project)
+    $todos = @($Project.todos)
+    return @{ id = $Project.id; name = $Project.name; folderName = $Project.folderName; createdAt = $Project.createdAt; todoCount = $todos.Count; openTodoCount = @($todos | Where-Object { $_.status -ne "done" }).Count; todos = $todos }
+}
+
+function Get-ProjectById {
+    param([string]$Id)
+    $project = @((Get-ProjectStore).projects | Where-Object { $_.id -eq $Id } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    return $project[0]
+}
+
+function New-Project {
+    param([string]$Name)
+    $name = "$Name".Trim()
+    if ([string]::IsNullOrWhiteSpace($name)) { throw "Bitte einen Projektnamen eingeben." }
+    $store = Get-ProjectStore
+    $baseFolder = Get-SafeFolderName $name
+    $folderName = $baseFolder
+    $suffix = 2
+    while (@($store.projects | Where-Object { $_.folderName -ieq $folderName }).Count -gt 0) { $folderName = "$baseFolder-$suffix"; $suffix++ }
+    $projectRoot = Join-Path (Join-Path (Ensure-StorageRoot) "Projekte") $folderName
+    New-Item -ItemType Directory -Path (Join-Path $projectRoot "Literatur") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $projectRoot "Quellen") -Force | Out-Null
+    $project = [PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); name = $name; folderName = $folderName; createdAt = (Get-Date).ToString("o"); todos = @() }
+    $store.projects = @($store.projects) + @($project)
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project
+}
+
+function New-ProjectTodo {
+    param([string]$ProjectId, [string]$Title, [string]$Body)
+    $title = "$Title".Trim()
+    if ([string]::IsNullOrWhiteSpace($title)) { throw "Bitte einen TODO-Titel eingeben." }
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $todo = [PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); title = $title; body = "$Body".Trim(); status = "open"; createdAt = (Get-Date).ToString("o") }
+    $project[0].todos = @($project[0].todos) + @($todo)
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Set-ProjectTodo {
+    param([string]$ProjectId, [string]$TodoId, $Body)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $todo = @($project[0].todos | Where-Object { $_.id -eq $TodoId } | Select-Object -First 1)
+    if (-not $todo) { throw "TODO wurde nicht gefunden." }
+    if ($null -ne $Body.title) { $todo[0].title = "$($Body.title)".Trim() }
+    if ($null -ne $Body.body) { $todo[0].body = "$($Body.body)".Trim() }
+    if ("$($Body.status)" -in @("open", "done")) { $todo[0].status = "$($Body.status)" }
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
 }
 
 function Get-RepoInfo {
@@ -133,8 +243,8 @@ function Get-Status {
     $branch = (git branch --show-current 2>$null)
     $short = (git status -sb 2>$null) -join "`n"
     $porcelain = (git status --porcelain 2>$null)
-    $dataStatus = (git status --porcelain -- data 2>$null)
-    $ignoredData = (git status --ignored --porcelain -- data 2>$null | Where-Object { $_.StartsWith("!!") })
+    $env = Import-EnvFile
+    $storagePath = Get-StoragePath $env
     $ahead = 0
     $behind = 0
     $counts = (git rev-list --left-right --count HEAD...@{u} 2>$null)
@@ -143,7 +253,7 @@ function Get-Status {
         $ahead = [int]$parts[0]
         $behind = [int]$parts[1]
     }
-    return @{ repo = $repo; branch = $branch; short = $short; dirty = -not [string]::IsNullOrWhiteSpace($porcelain); dataChanges = @($dataStatus).Count; ignoredData = @($ignoredData).Count; ahead = $ahead; behind = $behind }
+    return @{ repo = $repo; branch = $branch; short = $short; dirty = -not [string]::IsNullOrWhiteSpace($porcelain); ahead = $ahead; behind = $behind; storage = @{ provider = if ($env["STORAGE_PROVIDER"]) { $env["STORAGE_PROVIDER"] } else { "local" }; path = $storagePath; shareUrl = $env["STORAGE_SHARE_URL"]; available = Test-Path -LiteralPath $storagePath } }
 }
 
 function Get-Log {
@@ -175,29 +285,36 @@ function Handle-Api {
                 webdavUrl = $env["WEBDAV_URL"]
                 webdavUsername = $env["WEBDAV_USERNAME"]
                 webdavPassword = $env["WEBDAV_PASSWORD"]
+                storageProvider = if ($env["STORAGE_PROVIDER"]) { $env["STORAGE_PROVIDER"] } else { "local" }
+                storagePath = Get-StoragePath $env
+                storageShareUrl = $env["STORAGE_SHARE_URL"]
             }
             return
         }
         if ($Path -eq "/api/settings" -and $method -eq "POST") {
             $body = Read-JsonBody $Context.Request
             $env = Import-EnvFile
-            $env["GITHUB_USERNAME"] = "$($body.githubUsername)"
-            $env["GITHUB_EMAIL"] = "$($body.githubEmail)"
-            if (-not [string]::IsNullOrWhiteSpace("$($body.githubToken)")) { $env["GITHUB_TOKEN"] = "$($body.githubToken)" }
+            if ($body.PSObject.Properties.Name -contains "githubUsername") { $env["GITHUB_USERNAME"] = "$($body.githubUsername)" }
+            if ($body.PSObject.Properties.Name -contains "githubEmail") { $env["GITHUB_EMAIL"] = "$($body.githubEmail)" }
+            if (($body.PSObject.Properties.Name -contains "githubToken") -and -not [string]::IsNullOrWhiteSpace("$($body.githubToken)")) { $env["GITHUB_TOKEN"] = "$($body.githubToken)" }
             $env["WEBDAV_URL"] = "$($body.webdavUrl)"
             $env["WEBDAV_USERNAME"] = "$($body.webdavUsername)"
             $env["WEBDAV_PASSWORD"] = "$($body.webdavPassword)"
+            $env["STORAGE_PROVIDER"] = "$($body.storageProvider)"
+            $env["ZOTERO_STORAGE_PATH"] = "$($body.storagePath)"
+            $env["STORAGE_SHARE_URL"] = "$($body.storageShareUrl)"
+            $storagePath = Ensure-StorageRoot $env
             Save-EnvFile $env
             if ($env["GITHUB_USERNAME"]) { git config user.name "$($env["GITHUB_USERNAME"])" | Out-Null }
             if ($env["GITHUB_EMAIL"]) { git config user.email "$($env["GITHUB_EMAIL"])" | Out-Null }
-            Send-Json $Context @{ ok = $true }
+            Send-Json $Context @{ ok = $true; storagePath = $storagePath; restartRequired = $true }
             return
         }
         if ($Path -eq "/api/sync-log") {
             $logFile = Join-Path $ScriptDir ".sync-log.json"
             if (Test-Path $logFile) {
                 try {
-                    $entries = Get-Content $logFile -Raw | ConvertFrom-Json
+                    $entries = Get-Content $logFile -Raw -Encoding UTF8 | ConvertFrom-Json
                     Send-Json $Context @($entries)
                 } catch {
                     Send-Json $Context @()
@@ -210,7 +327,8 @@ function Handle-Api {
         if ($Path -eq "/api/commit" -and $method -eq "POST") {
             $body = Read-JsonBody $Context.Request
             $msg = if ("$($body.message)".Trim()) { "$($body.message)".Trim() } else { "Manueller Sync [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')]" }
-            git add -A | Out-Null
+            # Attachment storage is outside the repository; never stage the legacy data fallback either.
+            git add -A -- . ":(exclude)data" | Out-Null
             $diffCheck = Invoke-Git @("diff", "--cached", "--quiet")
             if ($diffCheck.exitCode -eq 0) {
                 Send-Json $Context @{ ok = $false; error = "Keine Aenderungen zum Committen vorhanden." } 400
@@ -240,6 +358,25 @@ function Handle-Api {
         if ($Path -eq "/api/issues" -and $method -eq "GET") {
             $items = Invoke-GitHub "GET" "/issues?state=all&per_page=100"
             Send-Json $Context @($items | Where-Object { -not $_.pull_request })
+            return
+        }
+        if ($Path -eq "/api/projects" -and $method -eq "GET") {
+            $store = Get-ProjectStore
+            Send-Json $Context @($store.projects | ForEach-Object { Get-ProjectSummary $_ })
+            return
+        }
+        if ($Path -eq "/api/projects" -and $method -eq "POST") {
+            $body = Read-JsonBody $Context.Request
+            Send-Json $Context (New-Project "$($body.name)") 201
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/todos$" -and $method -eq "POST") {
+            $body = Read-JsonBody $Context.Request
+            Send-Json $Context (New-ProjectTodo $matches[1] "$($body.title)" "$($body.body)") 201
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/todos/([a-f0-9]{32})$" -and $method -eq "PATCH") {
+            Send-Json $Context (Set-ProjectTodo $matches[1] $matches[2] (Read-JsonBody $Context.Request))
             return
         }
         if ($Path -eq "/api/issues" -and $method -eq "POST") {
@@ -276,7 +413,7 @@ function Serve-File {
     if (-not (Test-Path $file)) { Send-Response $Context 404 "Not found" "text/plain"; return }
     $ext = [IO.Path]::GetExtension($file).ToLowerInvariant()
     $type = switch ($ext) { ".html" { "text/html" } ".css" { "text/css" } ".js" { "application/javascript" } default { "text/plain" } }
-    Send-Response $Context 200 (Get-Content -Raw $file) $type
+    Send-Response $Context 200 (Get-Content -Raw -Encoding UTF8 $file) $type
 }
 
 $script:listener = New-Object Net.HttpListener

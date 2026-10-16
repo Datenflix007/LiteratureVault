@@ -1,480 +1,137 @@
-const state = {
-  issues: [],
-  pulls: []
-};
-
+const state = { projects: [], pulls: [] };
 const $ = (id) => document.getElementById(id);
-
-const API_BASE = (location.protocol === "http:" || location.protocol === "https:") ? "" : "http://localhost:8765";
+const API_BASE = location.protocol === "http:" || location.protocol === "https:" ? "" : "http://localhost:8765";
 
 async function api(path, options = {}) {
-  const response = await fetch(API_BASE + path, {
-    headers: { "Content-Type": "application/json" },
-    ...options
-  });
+  const response = await fetch(API_BASE + path, { headers: { "Content-Type": "application/json" }, ...options });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Request fehlgeschlagen");
   return data;
 }
-
+function esc(value) { return String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"); }
 function toast(message) {
-  const node = $("toast");
-  node.textContent = message;
-  node.classList.add("show");
-  setTimeout(() => node.classList.remove("show"), 2800);
+  $("toast").textContent = message; $("toast").classList.add("show");
+  setTimeout(() => $("toast").classList.remove("show"), 3200);
 }
-
 function setView(name) {
-  document.querySelectorAll(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
-  document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-  $(`${name}View`).classList.add("active");
-  const titles = { graph: "Source Control Graph", issues: "TODOs", pulls: "Pull Requests" };
-  $("viewTitle").textContent = titles[name] || name;
+  document.querySelectorAll(".nav").forEach((button) => button.classList.toggle("active", button.dataset.view === name));
+  document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
+  $(name + "View").classList.add("active");
+  $("viewTitle").textContent = ({ projects: "Projektbereiche", graph: "Code & Speicher-Aktivität", pulls: "Pull Requests" })[name];
 }
-
-// ── Status & Graph ──────────────────────────────────────────────────
 
 async function loadStatus() {
-  const status = await api("/api/status");
-  $("repoName").textContent = status.repo?.remote || "lokales Repository";
-  $("branchBadge").textContent = status.branch || "no branch";
-  $("syncBadge").textContent = `${status.ahead} ahead / ${status.behind} behind`;
-  const ignored = status.ignoredData ? ` · ${status.ignoredData} ignorierte data-Dateien` : "";
-  $("statusLine").textContent = status.dirty
-    ? `Lokale Aenderungen vorhanden · data: ${status.dataChanges}${ignored}`
-    : `Arbeitsbaum sauber${ignored}`;
+  const status = await api("/api/status"), storage = status.storage || {};
+  $("repoName").textContent = (storage.provider || "lokal") + " · externer Speicher";
+  $("storageBadge").textContent = storage.available ? (storage.provider || "lokal") + " verbunden" : "Speicher prüfen";
+  $("syncBadge").textContent = status.ahead + " ↑ / " + status.behind + " ↓ Code";
+  $("statusLine").textContent = storage.available
+    ? "Anhänge und Projekte: " + storage.path + " — außerhalb von Git und Git LFS"
+    : "Der Speicherordner ist nicht erreichbar: " + (storage.path || "nicht konfiguriert");
 }
-
-function renderGraphItems(commits, syncEntries) {
-  const graph = $("commitGraph");
-  graph.innerHTML = "";
-
-  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
-  const items = [
-    ...commits.map((c) => ({ type: "commit", ts: new Date(c.date), data: c })),
-    ...syncEntries
-      .filter((l) => new Date(l.ts) >= cutoff)
-      .map((l) => ({ type: "log", ts: new Date(l.ts), data: l }))
-  ].sort((a, b) => b.ts - a.ts);
-
-  items.forEach((item, i) => {
-    if (item.type === "commit") {
-      const row = document.createElement("div");
-      row.className = "commit-row";
-      if (i === 0) row.classList.add("is-first");
-      if (i === items.length - 1) row.classList.add("is-last");
-      row.innerHTML = `
-        <div class="rail"><span class="dot"></span></div>
-        <div>
-          <div class="commit-subject">${escapeHtml(item.data.subject)}</div>
-          <div class="commit-meta">${escapeHtml(item.data.author)} · ${new Date(item.data.date).toLocaleString()}</div>
-        </div>
-        <div class="commit-hash">${escapeHtml(item.data.short)}</div>
-      `;
-      graph.appendChild(row);
-    } else {
-      const row = document.createElement("div");
-      row.className = "sync-row";
-      const time = new Date(item.data.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      row.innerHTML = `
-        <div class="rail"><span class="sync-dot ${escapeHtml(item.data.level)}"></span></div>
-        <div class="sync-text">
-          <span class="sync-time">${time}</span>
-          ${escapeHtml(item.data.text)}
-        </div>
-      `;
-      graph.appendChild(row);
-    }
-  });
-
-  if (items.length === 0) {
-    graph.innerHTML = `<div style="padding:18px;color:var(--muted)">Noch keine Aktivitaet.</div>`;
-  }
+function todoMarkup(project) {
+  const todos = project.todos || [];
+  if (!todos.length) return '<p class="empty-state">Noch keine TODOs. Plane den nächsten sinnvollen Schritt.</p>';
+  return todos.map((todo) => {
+    const done = todo.status === "done";
+    return '<li class="project-todo ' + (done ? "is-done" : "") + '">' +
+      '<button class="todo-toggle" data-project-id="' + project.id + '" data-todo-id="' + todo.id + '" data-todo-status="' + todo.status + '" title="Status wechseln">' + (done ? "✓" : "") + '</button>' +
+      '<div><strong>' + esc(todo.title) + '</strong>' + (todo.body ? '<span>' + esc(todo.body) + '</span>' : "") + '</div></li>';
+  }).join("");
 }
-
-async function loadGraph() {
-  const [commits, syncLog] = await Promise.all([
-    api("/api/log"),
-    api("/api/sync-log").catch(() => [])
-  ]);
-  renderGraphItems(commits, Array.isArray(syncLog) ? syncLog : []);
-}
-
-// ── TODOs ───────────────────────────────────────────────────────────
-
-function getTodoStatus(item) {
-  if (item.state === "closed") return "closed";
-  const labels = item.labels || [];
-  if (labels.some((l) => (l.name || l) === "in-progress")) return "in_progress";
-  return "open";
-}
-
-function renderTodos(items) {
-  const target = $("issuesList");
-  target.innerHTML = "";
-
-  const showClosed = $("showClosedTodos").checked;
-  const filtered = showClosed ? items : items.filter((i) => i.state === "open");
-
-  if (!filtered.length) {
-    target.innerHTML = `<div style="padding:18px;color:var(--muted)">${showClosed ? "Keine TODOs gefunden." : "Keine offenen TODOs. Super!"}</div>`;
+function renderProjects(projects) {
+  const target = $("projectsList"); target.innerHTML = "";
+  if (!projects.length) {
+    target.innerHTML = '<article class="empty-project"><span class="project-icon">✦</span><h2>Dein erster Projektbereich</h2><p>Lege ein Projekt an. Literatur, Quellen und TODOs werden sauber an einem Ort strukturiert.</p><button class="primary-btn" data-new-project>Projekt anlegen</button></article>';
     return;
   }
-
-  filtered.forEach((item) => {
-    const status = getTodoStatus(item);
-    const isDone = status === "closed";
-    const isInProgress = status === "in_progress";
-    const circleClass = isDone ? "checked" : isInProgress ? "in-progress" : "";
-    const tagLabel = { open: "Offen", in_progress: "In Bearbeitung", closed: "Erledigt" }[status];
-    const toggleTitle = isDone ? "Wieder öffnen" : "Als erledigt markieren";
-
-    const card = document.createElement("article");
-    card.className = `todo-card${isDone ? " todo-done" : ""}`;
-    const bodyPreview = (item.body || "").trim().slice(0, 200);
-    card.innerHTML = `
-      <div class="todo-main">
-        <div class="todo-check ${circleClass}"
-             data-todo-number="${item.number}"
-             data-todo-status="${status}"
-             title="${toggleTitle}"></div>
-        <div class="todo-content">
-          <div class="todo-title">#${item.number} ${escapeHtml(item.title)}</div>
-          ${bodyPreview ? `<div class="todo-body-preview">${escapeHtml(bodyPreview)}</div>` : ""}
-        </div>
-        <span class="todo-tag ${status}">${escapeHtml(tagLabel)}</span>
-      </div>
-      <div class="todo-actions">
-        <button data-edit="issue" data-number="${item.number}">Bearbeiten</button>
-        <a href="${item.html_url}" target="_blank" rel="noreferrer"><button>GitHub ↗</button></a>
-      </div>
-    `;
+  projects.forEach((project) => {
+    const card = document.createElement("article"); card.className = "project-card";
+    card.innerHTML = '<div class="project-head"><div><span class="eyebrow">PROJEKT</span><h2>' + esc(project.name) + '</h2></div><span class="todo-count">' + (project.openTodoCount || 0) + ' offen</span></div>' +
+      '<div class="folder-strip"><span>▣ Literatur</span><span>⌁ Quellen</span></div><p class="project-path">Projekte/' + esc(project.folderName) + '</p>' +
+      '<ul class="project-todos">' + todoMarkup(project) + '</ul><button class="add-todo" data-new-todo="' + project.id + '" data-project-name="' + esc(project.name) + '">+ TODO für dieses Projekt</button>';
     target.appendChild(card);
   });
 }
-
-async function loadIssues() {
-  state.issues = await api("/api/issues");
-  renderTodos(state.issues);
+async function loadProjects() { state.projects = await api("/api/projects"); renderProjects(state.projects); }
+function openNewProjectDialog() { $("newProjectName").value = ""; $("newProjectDialog").showModal(); setTimeout(() => $("newProjectName").focus(), 30); }
+async function createProject(event) {
+  event.preventDefault(); const name = $("newProjectName").value.trim();
+  if (!name) return toast("Bitte einen Projektnamen eingeben.");
+  await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) });
+  $("newProjectDialog").close(); toast("Projekt, Literatur- und Quellenordner wurden angelegt."); await loadProjects();
 }
-
-function openNewTodoDialog() {
-  $("newTodoTitle").value = "";
-  $("newTodoBody").value = "";
-  $("newTodoDialog").showModal();
-  setTimeout(() => $("newTodoTitle").focus(), 50);
+function openNewTodoDialog(id, name) {
+  $("newTodoProjectId").value = id; $("newTodoProjectName").textContent = "TODO · " + name;
+  $("newTodoTitle").value = ""; $("newTodoBody").value = ""; $("newTodoDialog").showModal(); setTimeout(() => $("newTodoTitle").focus(), 30);
 }
-
-async function createTodo() {
-  const title = $("newTodoTitle").value.trim();
-  if (!title) { toast("Bitte einen Titel eingeben."); return; }
-  $("newTodoDialog").close();
-  toast("TODO wird erstellt...");
-  try {
-    await api("/api/issues", {
-      method: "POST",
-      body: JSON.stringify({ title, body: $("newTodoBody").value.trim() })
-    });
-    toast("TODO erstellt");
-    await loadIssues();
-  } catch (err) {
-    toast(`Fehler: ${err.message}`);
-  }
+async function createTodo(event) {
+  event.preventDefault(); const projectId = $("newTodoProjectId").value, title = $("newTodoTitle").value.trim();
+  if (!title) return toast("Bitte einen TODO-Titel eingeben.");
+  await api("/api/projects/" + projectId + "/todos", { method: "POST", body: JSON.stringify({ title, body: $("newTodoBody").value.trim() }) });
+  $("newTodoDialog").close(); toast("TODO im Projekt gespeichert."); await loadProjects();
 }
-
-async function quickToggleTodo(number, currentStatus) {
-  const closing = currentStatus !== "closed";
-  const payload = closing
-    ? { state: "closed", labels: [] }
-    : { state: "open" };
-  try {
-    await api(`/api/issues/${number}`, {
-      method: "PATCH",
-      body: JSON.stringify(payload)
-    });
-    toast(closing ? "TODO erledigt ✓" : "TODO wieder geöffnet");
-    await loadIssues();
-  } catch (err) {
-    toast(`Fehler: ${err.message}`);
-  }
+async function toggleTodo(projectId, todoId, status) {
+  await api("/api/projects/" + projectId + "/todos/" + todoId, { method: "PATCH", body: JSON.stringify({ status: status === "done" ? "open" : "done" }) });
+  await loadProjects();
 }
-
-// ── Pull Requests ────────────────────────────────────────────────────
-
-function renderPulls(items) {
-  const target = $("pullsList");
-  target.innerHTML = "";
-  if (!items.length) {
-    target.innerHTML = `<div class="item-card"><p>Keine Pull Requests gefunden.</p></div>`;
-    return;
-  }
+function renderGraphItems(commits, entries) {
+  const graph = $("commitGraph"), items = commits.map((data) => ({ type: "commit", ts: new Date(data.date), data }))
+    .concat(entries.map((data) => ({ type: "log", ts: new Date(data.ts), data }))).sort((a, b) => b.ts - a.ts);
+  graph.innerHTML = items.length ? "" : '<p class="empty-state">Noch keine Aktivität.</p>';
   items.forEach((item) => {
-    const card = document.createElement("article");
-    card.className = "item-card";
-    card.innerHTML = `
-      <header>
-        <div>
-          <h3>#${item.number} ${escapeHtml(item.title)}</h3>
-          <p>${escapeHtml((item.body || "").slice(0, 220))}</p>
-        </div>
-        <span class="state">${escapeHtml(item.state)}</span>
-      </header>
-      <div>
-        <button data-edit="pull" data-number="${item.number}">Bearbeiten</button>
-        <a href="${item.html_url}" target="_blank" rel="noreferrer"><button>GitHub ↗</button></a>
-      </div>
-    `;
-    target.appendChild(card);
-  });
-}
-
-async function loadPulls() {
-  state.pulls = await api("/api/pulls");
-  renderPulls(state.pulls);
-}
-
-// ── Edit dialog ──────────────────────────────────────────────────────
-
-function openEdit(type, number) {
-  const items = type === "issue" ? state.issues : state.pulls;
-  const item = items.find((e) => e.number === Number(number));
-  if (!item) return;
-  $("editType").value = type;
-  $("editNumber").value = item.number;
-  $("editTitle").textContent = type === "issue" ? `TODO #${item.number}` : `Pull Request #${item.number}`;
-  $("editItemTitle").value = item.title || "";
-  $("editItemBody").value = item.body || "";
-
-  const sel = $("editItemState");
-  if (type === "issue") {
-    sel.innerHTML = `
-      <option value="open">Offen</option>
-      <option value="in_progress">In Bearbeitung</option>
-      <option value="closed">Erledigt</option>
-    `;
-    sel.value = getTodoStatus(item);
-  } else {
-    sel.innerHTML = `
-      <option value="open">open</option>
-      <option value="closed">closed</option>
-    `;
-    sel.value = item.state || "open";
-  }
-  $("editDialog").showModal();
-}
-
-async function saveItem(event) {
-  event.preventDefault();
-  const type = $("editType").value;
-  const number = $("editNumber").value;
-  const selectedStatus = $("editItemState").value;
-
-  const payload = {
-    title: $("editItemTitle").value,
-    body: $("editItemBody").value
-  };
-
-  if (type === "issue") {
-    if (selectedStatus === "in_progress") {
-      payload.state = "open";
-      payload.labels = ["in-progress"];
-    } else if (selectedStatus === "closed") {
-      payload.state = "closed";
-      payload.labels = [];
+    const row = document.createElement("div");
+    if (item.type === "commit") {
+      row.className = "commit-row"; row.innerHTML = '<div class="rail"><span class="dot"></span></div><div><div class="commit-subject">' + esc(item.data.subject) + '</div><div class="commit-meta">' + esc(item.data.author) + ' · ' + item.ts.toLocaleString() + '</div></div><div class="commit-hash">' + esc(item.data.short) + '</div>';
     } else {
-      payload.state = "open";
-      payload.labels = [];
-    }
-  } else {
-    payload.state = selectedStatus;
-  }
-
-  await api(`/api/${type === "issue" ? "issues" : "pulls"}/${number}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload)
+      row.className = "sync-row"; row.innerHTML = '<div class="rail"><span class="sync-dot ' + esc(item.data.level || "info") + '"></span></div><div class="sync-text"><span class="sync-time">' + item.ts.toLocaleTimeString() + '</span>' + esc(item.data.text) + '</div>';
+    } graph.appendChild(row);
   });
-  $("editDialog").close();
-  toast("Gespeichert");
-  if (type === "issue") await loadIssues(); else await loadPulls();
 }
-
-// ── Settings ─────────────────────────────────────────────────────────
-
+async function loadGraph() { const both = await Promise.all([api("/api/log"), api("/api/sync-log").catch(() => [])]); renderGraphItems(both[0], Array.isArray(both[1]) ? both[1] : []); }
+function renderPulls(items) {
+  const target = $("pullsList"); target.innerHTML = items.length ? "" : '<p class="empty-state">Keine Pull Requests gefunden.</p>';
+  items.forEach((item) => { const card = document.createElement("article"); card.className = "item-card"; card.innerHTML = '<header><div><h3>#' + item.number + " " + esc(item.title) + '</h3><p>' + esc((item.body || "").slice(0, 220)) + '</p></div><span class="state">' + esc(item.state) + '</span></header><a href="' + item.html_url + '" target="_blank" rel="noreferrer"><button>GitHub ↗</button></a>'; target.appendChild(card); });
+}
+async function loadPulls() { state.pulls = await api("/api/pulls"); renderPulls(state.pulls); }
 async function openSettings() {
-  const settings = await api("/api/settings");
-  $("githubUsername").value = settings.githubUsername || "";
-  $("githubEmail").value = settings.githubEmail || "";
-  $("githubToken").value = "";
-  $("webdavUrl").value = settings.webdavUrl || "http://localhost:8080";
-  $("webdavUsername").value = settings.webdavUsername || "zotero";
-  $("webdavPassword").value = settings.webdavPassword || "changeme123";
-  $("tokenHint").textContent = settings.tokenSet
-    ? "GitHub Token ist gesetzt. Feld leer lassen, um ihn zu behalten."
-    : "Kein GitHub Token gespeichert.";
-  $("settingsDialog").showModal();
+  const settings = await api("/api/settings"); $("storageProvider").value = settings.storageProvider || "onedrive"; $("storagePath").value = settings.storagePath || ""; $("storageShareUrl").value = settings.storageShareUrl || "";
+  $("githubUsername").value = settings.githubUsername || ""; $("githubEmail").value = settings.githubEmail || ""; $("githubToken").value = ""; $("tokenHint").textContent = settings.tokenSet ? "Ein Token ist gespeichert. Feld leer lassen, um ihn nicht zu ändern." : "Kein GitHub-Token gespeichert.";
+  $("webdavUrl").value = settings.webdavUrl || "http://localhost:8080"; $("webdavUsername").value = settings.webdavUsername || "zotero"; $("webdavPassword").value = settings.webdavPassword || "changeme123"; $("settingsDialog").showModal();
 }
-
 async function saveSettings(event) {
-  event.preventDefault();
-  await api("/api/settings", {
-    method: "POST",
-    body: JSON.stringify({
-      githubUsername: $("githubUsername").value,
-      githubEmail: $("githubEmail").value,
-      githubToken: $("githubToken").value,
-      webdavUrl: $("webdavUrl").value,
-      webdavUsername: $("webdavUsername").value,
-      webdavPassword: $("webdavPassword").value
-    })
-  });
-  $("settingsDialog").close();
-  toast("Einstellungen gespeichert");
-  await loadStatus();
+  event.preventDefault(); const storagePath = $("storagePath").value.trim(); if (!storagePath) return toast("Bitte den lokalen Cloud-Ordner eintragen.");
+  await api("/api/settings", { method: "POST", body: JSON.stringify({ storageProvider: $("storageProvider").value, storagePath, storageShareUrl: $("storageShareUrl").value.trim(), githubUsername: $("githubUsername").value.trim(), githubEmail: $("githubEmail").value.trim(), githubToken: $("githubToken").value, webdavUrl: $("webdavUrl").value.trim(), webdavUsername: $("webdavUsername").value.trim(), webdavPassword: $("webdavPassword").value }) });
+  $("settingsDialog").close(); toast("Gespeichert. WebDAV über quickstart.bat neu starten, damit Docker den neuen Ordner einbindet."); await Promise.all([loadStatus(), loadProjects()]);
 }
-
-// ── Git actions ──────────────────────────────────────────────────────
-
-async function pullRemote() {
-  toast("Pull wird ausgefuehrt...");
-  const result = await api("/api/pull", { method: "POST", body: "{}" });
-  if (result.skipped) toast(result.reason);
-  else toast(result.pulled ? "Pull abgeschlossen" : "Pull fehlgeschlagen");
-  await Promise.all([loadStatus(), loadGraph()]);
-}
-
-function openCommitDialog() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const defaultMsg = `Manueller Sync ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-  $("commitMessage").value = defaultMsg;
-  $("commitDialog").showModal();
-  $("commitMessage").select();
-}
-
+async function pullRemote() { const result = await api("/api/pull", { method: "POST", body: "{}" }); toast(result.skipped ? result.reason : result.pulled ? "Code-Pull abgeschlossen" : "Code-Pull fehlgeschlagen"); await Promise.all([loadStatus(), loadGraph()]); }
+function openCommitDialog() { $("commitMessage").value = "Code-Update " + new Date().toLocaleString(); $("commitDialog").showModal(); }
 async function doManualCommit() {
-  const message = $("commitMessage").value.trim();
-  const push = $("commitPush").checked;
-  if (!message) { toast("Bitte eine Commit-Nachricht eingeben."); return; }
-  $("commitDialog").close();
-  toast("Commit wird erstellt...");
-  try {
-    const result = await api("/api/commit", {
-      method: "POST",
-      body: JSON.stringify({ message, push })
-    });
-    if (result.ok) {
-      toast(push && result.pushed ? `Committed & gepusht` : `Committed: ${result.message}`);
-    } else {
-      toast(`Fehler: ${result.error}`);
-    }
-  } catch (err) {
-    toast(`Fehler: ${err.message}`);
-  }
-  await Promise.all([loadStatus(), loadGraph()]);
+  const message = $("commitMessage").value.trim(); if (!message) return toast("Bitte eine Commit-Nachricht eingeben."); $("commitDialog").close();
+  const result = await api("/api/commit", { method: "POST", body: JSON.stringify({ message, push: $("commitPush").checked }) });
+  toast(result.ok ? (result.pushed ? "Code committed und gepusht" : "Code committed") : "Fehler: " + result.error); await Promise.all([loadStatus(), loadGraph()]);
 }
+async function stopServer() { if (!confirm("Server wirklich stoppen?")) return; try { await api("/api/shutdown", { method: "POST", body: "{}" }); } catch (_) {} $("statusLine").textContent = "Server gestoppt."; }
 
-async function stopServer() {
-  if (!confirm("Server wirklich stoppen? Die UI wird danach nicht mehr erreichbar sein.")) return;
-  try {
-    await api("/api/shutdown", { method: "POST", body: "{}" });
-  } catch (_) { /* connection closes as expected */ }
-  $("statusLine").textContent = "Server gestoppt. Seite neu laden um neu zu verbinden.";
-  toast("Server wurde gestoppt.");
-}
-
-// ── Sidebar resize ───────────────────────────────────────────────────
-
-(function initResize() {
-  const handle = $("resizeHandle");
-  let dragging = false, startX = 0, startW = 0;
-
-  const getSidebarW = () =>
-    parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w")) || 260;
-
-  const setSidebarW = (w) => {
-    const clamped = Math.max(160, Math.min(480, w));
-    document.documentElement.style.setProperty("--sidebar-w", clamped + "px");
-    return clamped;
-  };
-
-  handle.addEventListener("mousedown", (e) => {
-    if (document.body.classList.contains("sidebar-collapsed")) return;
-    dragging = true;
-    startX = e.clientX;
-    startW = getSidebarW();
-    handle.classList.add("dragging");
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    e.preventDefault();
-  });
-
-  document.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
-    setSidebarW(startW + (e.clientX - startX));
-  });
-
-  document.addEventListener("mouseup", () => {
-    if (!dragging) return;
-    dragging = false;
-    handle.classList.remove("dragging");
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-    localStorage.setItem("sidebarW", getSidebarW());
-  });
-
-  const saved = localStorage.getItem("sidebarW");
-  if (saved) setSidebarW(parseInt(saved));
-})();
-
-// ── Utilities ────────────────────────────────────────────────────────
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-// ── Event wiring ─────────────────────────────────────────────────────
-
-document.querySelectorAll(".nav").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
-
+document.querySelectorAll(".nav").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
 document.body.addEventListener("click", (event) => {
-  const edit = event.target.closest("[data-edit]");
-  if (edit) { openEdit(edit.dataset.edit, edit.dataset.number); return; }
-
-  const check = event.target.closest("[data-todo-number]");
-  if (check) {
-    quickToggleTodo(check.dataset.todoNumber, check.dataset.todoStatus).catch((e) => toast(e.message));
-  }
+  if (event.target.closest("[data-new-project]")) return openNewProjectDialog();
+  const add = event.target.closest("[data-new-todo]"); if (add) return openNewTodoDialog(add.dataset.newTodo, add.dataset.projectName);
+  const todo = event.target.closest("[data-todo-id]"); if (todo) toggleTodo(todo.dataset.projectId, todo.dataset.todoId, todo.dataset.todoStatus).catch((error) => toast(error.message));
 });
-
-$("refreshGraph").addEventListener("click", () => Promise.all([loadStatus(), loadGraph()]).catch((e) => toast(e.message)));
-$("refreshIssues").addEventListener("click", () => loadIssues().catch((e) => toast(e.message)));
-$("refreshPulls").addEventListener("click", () => loadPulls().catch((e) => toast(e.message)));
-$("settingsBtn").addEventListener("click", () => openSettings().catch((e) => toast(e.message)));
-$("pullBtn").addEventListener("click", () => pullRemote().catch((e) => toast(e.message)));
-$("commitBtn").addEventListener("click", () => openCommitDialog());
-$("commitSaveBtn").addEventListener("click", () => doManualCommit().catch((e) => toast(e.message)));
-$("commitCancelBtn").addEventListener("click", () => $("commitDialog").close());
-$("stopServerBtn").addEventListener("click", () => stopServer().catch((e) => toast(e.message)));
-$("newTodoBtn").addEventListener("click", () => openNewTodoDialog());
-$("newTodoSaveBtn").addEventListener("click", () => createTodo().catch((e) => toast(e.message)));
-$("newTodoCancelBtn").addEventListener("click", () => $("newTodoDialog").close());
+$("newProjectBtn").addEventListener("click", openNewProjectDialog);
+$("newProjectSaveBtn").addEventListener("click", (event) => createProject(event).catch((error) => toast(error.message)));
+$("newTodoSaveBtn").addEventListener("click", (event) => createTodo(event).catch((error) => toast(error.message)));
+$("refreshGraph").addEventListener("click", () => Promise.all([loadStatus(), loadGraph()]).catch((error) => toast(error.message)));
+$("refreshPulls").addEventListener("click", () => loadPulls().catch((error) => toast(error.message)));
+$("settingsBtn").addEventListener("click", () => openSettings().catch((error) => toast(error.message)));
+$("pullBtn").addEventListener("click", () => pullRemote().catch((error) => toast(error.message)));
+$("commitBtn").addEventListener("click", openCommitDialog); $("commitSaveBtn").addEventListener("click", () => doManualCommit().catch((error) => toast(error.message)));
+$("stopServerBtn").addEventListener("click", () => stopServer().catch((error) => toast(error.message)));
 $("sidebarToggle").addEventListener("click", () => document.body.classList.toggle("sidebar-collapsed"));
-$("saveItemBtn").addEventListener("click", saveItem);
-$("saveSettingsBtn").addEventListener("click", saveSettings);
-$("showClosedTodos").addEventListener("change", () => renderTodos(state.issues));
 
-// Auto-refresh graph alle 5 Sekunden wenn Graph aktiv
-setInterval(() => {
-  if ($("graphView").classList.contains("active")) {
-    Promise.all([loadStatus(), loadGraph()]).catch(() => {});
-  }
-}, 5000);
-
-// Initial load
-Promise.all([loadStatus(), loadGraph()])
-  .then(() => Promise.allSettled([loadIssues(), loadPulls()]))
-  .catch((e) => toast(e.message));
+(function () { const handle = $("resizeHandle"); let dragging = false, startX = 0, startW = 0; const setWidth = (width) => document.documentElement.style.setProperty("--sidebar-w", Math.max(180, Math.min(440, width)) + "px");
+  handle.addEventListener("mousedown", (event) => { dragging = true; startX = event.clientX; startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w")) || 260; event.preventDefault(); });
+  document.addEventListener("mousemove", (event) => { if (dragging) setWidth(startW + event.clientX - startX); }); document.addEventListener("mouseup", () => { if (dragging) localStorage.setItem("sidebarW", parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w"))); dragging = false; });
+  if (localStorage.getItem("sidebarW")) setWidth(Number(localStorage.getItem("sidebarW"))); })();
+Promise.all([loadStatus(), loadProjects(), loadGraph()]).then(() => loadPulls().catch(() => {})).catch((error) => toast(error.message));

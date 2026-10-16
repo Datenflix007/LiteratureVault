@@ -1,174 +1,62 @@
 # MyLiteratureVault
-<img width="1691" height="1278" alt="image" src="https://github.com/user-attachments/assets/8a12c5e2-8550-4cde-a723-f1eb6a4f991f" />
 
-Lokaler WebDAV-Speicher fuer Zotero mit automatischer Synchronisation in dieses GitHub-Repository und einer lokalen Browser-UI zur Verwaltung.
+Lokaler WebDAV-Speicher für Zotero mit einem **extern synchronisierten Cloud-Ordner** und einer lokalen Projekt-UI.
 
-## Schnellstart
+Zotero-Anhänge werden nicht mehr nach GitHub und nicht nach Git LFS geschrieben. Der Docker-Container bindet stattdessen einen lokalen Ordner ein, den OneDrive, Nextcloud Desktop oder Dropbox bereits mit Ihrem Cloud-Konto synchronisiert.
 
-### Windows
+## So funktioniert der Speicher
 
-Doppelklick auf:
+Ein Freigabelink ist ein nützlicher Verweis, aber kein beschreibbares Laufwerk für Docker. Deshalb werden in .env.local drei Werte gespeichert:
 
-```text
-quickstart.bat
-```
+    STORAGE_PROVIDER=onedrive
+    ZOTERO_STORAGE_PATH=C:\Users\IhrName\OneDrive\MyLiteratureVault
+    STORAGE_SHARE_URL=https://onedrive.live.com/...
 
-Der Quickstart erledigt automatisch:
+- ZOTERO_STORAGE_PATH ist entscheidend: das ist der lokal synchronisierte Ordner.
+- STORAGE_SHARE_URL ist optional und dient als Referenz in den Einstellungen.
+- OneDrive, Dropbox und Nextcloud müssen auf dem Computer installiert sein und diesen Ordner synchronisieren.
 
-1. `.env.local` anlegen (beim ersten Start werden GitHub-Zugangsdaten abgefragt)
-2. Docker installieren, falls noch nicht vorhanden
-3. Docker starten
-4. WebDAV-Container starten
-5. Neueste GitHub-Commits pullen
-6. Auto-Sync als unsichtbaren Hintergrundprozess starten
-7. Browser-UI starten und Browser oeffnen
-8. Das Quickstart-Fenster schliesst sich automatisch
+GitHub bleibt ausschließlich für den Quellcode. .gitignore schützt den alten Fallback-Ordner data/, lokale Konfiguration und Laufzeitdaten.
 
-Die UI oeffnet sich automatisch unter:
+## Schnellstart (Windows)
 
-```text
-http://localhost:8765
-```
+Starten Sie quickstart.bat. Beim ersten Start werden Cloud-Anbieter, lokaler synchronisierter Ordner und optionaler Freigabelink abgefragt. Der Ordner wird bei Bedarf angelegt und als Docker-Bind-Mount für WebDAV verwendet.
 
-## Zotero einstellen
+Danach:
 
-In Zotero:
+    WebDAV: http://localhost:8080
+    UI:     http://localhost:8765
 
-1. `Einstellungen`
-2. `Sync`
-3. Datei-Sync auf `WebDAV` stellen
-4. Diese Werte eintragen:
+In Zotero: Einstellungen → Sync → Datei-Sync WebDAV, dann die WebDAV-URL sowie Benutzer und Passwort aus .env.local eintragen.
 
-```text
-URL:      http://localhost:8080
-Benutzer: zotero
-Passwort: changeme123
-```
+## Projekte, Literatur, Quellen und TODOs
 
-Wenn du das Passwort in `.env.local` geaendert hast, verwende dort den Wert von `WEBDAV_PASSWORD`.
+In der Ansicht **Projekte** kann ein Projekt angelegt werden. MyLiteratureVault erzeugt im externen Cloud-Ordner automatisch:
 
-## Browser-UI
+    Projekte/
+      Mein Projekt/
+        Literatur/
+        Quellen/
 
-Die UI laeuft unter `http://localhost:8765` und bietet:
+TODOs gehören immer zu genau einem Projekt. Sie werden gemeinsam mit den Projektdaten im externen Speicher abgelegt und deshalb über den Cloud-Desktop-Client synchronisiert, nicht als GitHub Issue und nicht als Git-Datei.
 
-### Source Control Graph
+## Speicher in der UI ändern
 
-Zeigt den Commit-Verlauf als Timeline. Auto-Sync-Statusmeldungen erscheinen farbcodiert zwischen den Commits:
+1. UI öffnen: http://localhost:8765
+2. In der Sidebar **Speicher** wählen.
+3. Anbieter, lokal synchronisierten Ordner und optionalen Freigabelink eintragen.
+4. Speichern und anschließend quickstart.bat erneut starten, damit Docker den neuen Ordner einbindet.
 
-- Gruener Punkt: Erfolgreich (Commit erstellt, Push abgeschlossen)
-- Blauer Punkt: Info (Aenderungen erkannt, Fetch)
-- Orangener Punkt: Warnung (Pull uebersprungen, Push-Fehler)
-- Roter Punkt: Fehler
+Beim Wechsel wird kein vorhandener Ordner verschoben oder gelöscht. Kopieren Sie vorhandene Daten bewusst selbst in den neuen Cloud-Ordner, bevor Sie die alte Ablage entfernen.
 
-Der Graph aktualisiert sich alle 5 Sekunden automatisch.
+## Code-Aktionen
 
-### TODOs
-
-Aufgabenverwaltung direkt in der UI, intern ueber GitHub Issues gespeichert:
-
-- **Neues TODO erstellen**: Schaltflaeche `+ Neues TODO` im Panel, Titel und optionale Beschreibung eingeben
-- **Als erledigt markieren**: Auf den Kreis links neben dem TODO klicken (gruen = erledigt)
-- **Bearbeiten**: `Bearbeiten`-Schaltflaeche oeffnet Vollansicht mit Titel, Text und Status
-- **Erledigte anzeigen/ausblenden**: Checkbox `Erledigte anzeigen` oben rechts im Panel
-- Alle TODOs sind auf GitHub unter `Issues` sichtbar und synchronisiert
-
-### Pull Requests
-
-Zeigt offene und geschlossene Pull Requests. Titel, Text und Status koennen bearbeitet werden.
-
-### Aktionen in der Sidebar
-
-| Schaltflaeche    | Funktion                                                      |
-|------------------|---------------------------------------------------------------|
-| Pull             | Fetch + Pull vom GitHub-Remote                                |
-| Commit           | Manuellen Commit erstellen (alle Aenderungen, freier Text)    |
-| Settings         | GitHub-Zugangsdaten und WebDAV-Einstellungen aendern          |
-| Server stoppen   | UI-Server beenden (danach Seite neu laden zum Wiederverbinden)|
-
-### Sidebar anpassen
-
-- **Breite aendern**: Den vertikalen Trennstrich zwischen Sidebar und Hauptbereich nach links oder rechts ziehen. Die Breite wird gespeichert.
-- **Einklappen**: Pfeil-Schaltflaeche oben rechts in der Sidebar
-
-## Manueller Commit
-
-Ueber die `Commit`-Schaltflaeche in der Sidebar koennen alle lokalen Aenderungen mit einer eigenen Nachricht committed werden. Standardtext ist `Manueller Sync [Datum Uhrzeit]`. Optional kann direkt gepusht werden.
-
-## Auto-Sync
-
-Der Auto-Sync laeuft als unsichtbarer Hintergrundprozess und:
-
-- ueberwacht das Verzeichnis `data/` auf Aenderungen
-- wartet 10 Sekunden Ruhezeit nach der letzten Aenderung (Debounce)
-- erstellt automatisch einen Commit mit Zeitstempel
-- pusht zu GitHub (falls Token gesetzt)
-- protokolliert alle Aktionen in `.sync-log.json`, die in der UI im Graph angezeigt werden
+Code pullen, Code committen und Pull Requests betreffen weiterhin nur dieses Projekt-Repository. Der Commit-Endpunkt schließt den alten Ordner data/ explizit aus. Der frühere auto-sync ist nun nur noch ein Speicher-Monitor und erzeugt keine Git-Commits für Zotero-Dateien.
 
 ## Wichtige Dateien
 
-```text
-quickstart.bat      Windows-Start per Doppelklick
-docker-compose.yml  WebDAV-Container
-auto-sync.ps1       Auto-Sync (laeuft als Hintergrundprozess)
-vault-ui.ps1        Lokaler HTTP-Server fuer die Browser-UI
-ui/                 HTML/CSS/JS der Browser-UI
-zotero-plugin/      Zotero-7-Plugin, das die lokale UI in Zotero oeffnet
-data/               Zotero-WebDAV-Dateien (werden automatisch synchronisiert)
-.env.local          Lokale Zugangsdaten (wird nicht committed)
-.sync-log.json      Auto-Sync-Protokoll fuer die UI (wird nicht committed)
-```
-
-## Zotero Plugin
-
-Das Plugin zeigt die lokale UI direkt aus Zotero heraus an. Vorher muss die UI laufen (`quickstart.bat`).
-
-Plugin bauen:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build-zotero-plugin.ps1
-```
-
-In Zotero installieren:
-
-```text
-Tools -> Add-ons -> Zahnrad -> Install Add-on From File...
-```
-
-Datei auswaehlen:
-
-```text
-dist/myliteraturevault-zotero.xpi
-```
-
-## Stoppen
-
-WebDAV stoppen:
-
-```bash
-docker compose down
-```
-
-Auto-Sync stoppen:
-
-- Task-Manager: PowerShell-Prozess mit `auto-sync.ps1` im Befehl beenden
-
-UI-Server stoppen:
-
-- Schaltflaeche `Server stoppen` in der Sidebar der UI
-- Oder: Task-Manager: PowerShell-Prozess mit `vault-ui.ps1` im Befehl beenden
-
-## Pruefen
-
-```bash
-docker ps
-git status
-git log --oneline -5
-```
-
-## Hinweise
-
-- Der Auto-Sync beobachtet nur `data/`. Andere Projektdateien koennen ueber `Commit` in der UI manuell committed werden.
-- Beim Start wird zuerst `git fetch` und bei sauberem Arbeitsbaum `git pull --ff-only` ausgefuehrt.
-- TODOs sind GitHub Issues. Ohne gueltigen `GITHUB_TOKEN` in `.env.local` koennen TODOs nicht geladen oder angelegt werden.
-- Lock-Dateien von WebDAV werden ueber `.gitignore` ignoriert.
-- Wenn der Push fehlschlaegt: GitHub-Token in `Settings` pruefen oder `quickstart.bat` erneut ausfuehren.
+    docker-compose.yml  Bindet ZOTERO_STORAGE_PATH in den WebDAV-Container ein
+    .env.local          Private WebDAV- und Speicher-Konfiguration, nicht committed
+    vault-ui.ps1        Lokaler Server, Projekt- und Speicher-API
+    ui/                 Projekt-UI
+    auto-sync.ps1       Reiner Speicher-Aktivitätsmonitor, kein Git-Sync

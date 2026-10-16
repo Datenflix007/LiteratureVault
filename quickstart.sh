@@ -24,7 +24,7 @@ load_env() {
     [[ "$key" =~ ^# ]] && continue
     [[ -z "$key" ]] && continue
     case "$key" in
-      GITHUB_USERNAME|GITHUB_EMAIL|GITHUB_TOKEN|WEBDAV_USERNAME|WEBDAV_PASSWORD|WEBDAV_URL)
+      GITHUB_USERNAME|GITHUB_EMAIL|GITHUB_TOKEN|WEBDAV_USERNAME|WEBDAV_PASSWORD|WEBDAV_URL|STORAGE_PROVIDER|ZOTERO_STORAGE_PATH|STORAGE_SHARE_URL)
         export "$key=$value" ;;
     esac
   done < .env.local
@@ -40,11 +40,26 @@ create_env_file() {
   fi
 
   FIRST_RUN=1
-  echo "Erster Start – bitte GitHub-Daten eingeben."
+  echo "Erster Start – GitHub speichert nur den Code, niemals Zotero-Anhaenge."
   read -r -p "GitHub Benutzername: "   github_user
   read -r -p "GitHub E-Mail: "         github_email
   read -r -s -p "GitHub Personal Access Token (leer = Git bereits angemeldet): " github_token
   echo ""
+  read -r -p "Cloud-Anbieter (onedrive, nextcloud, dropbox oder local; Standard: onedrive): " provider_input
+  provider="$(printf '%s' "$provider_input" | tr '[:upper:]' '[:lower:]')"
+  share_url=""
+  if [[ "$provider_input" =~ ^https?:// ]]; then
+    provider="onedrive"
+    share_url="$provider_input"
+    info "Der eingefuegte Link wird als OneDrive-Freigabelink gespeichert."
+  fi
+  provider="${provider:-onedrive}"
+  case "$provider" in onedrive|nextcloud|dropbox|local) ;; *) warn "Unbekannter Anbieter '$provider'; verwende onedrive."; provider="onedrive" ;; esac
+  default_storage_path="$HOME/OneDrive/MyLiteratureVault"
+  read -r -p "Lokal synchronisierter Cloud-Ordner (Standard: $default_storage_path): " storage_path
+  storage_path="${storage_path:-$default_storage_path}"
+  read -r -p "Optionaler Freigabelink zu diesem Ordner: " share_url_input
+  share_url="${share_url_input:-$share_url}"
 
   cat > .env.local <<EOF
 # GitHub Configuration
@@ -56,6 +71,11 @@ GITHUB_TOKEN=$github_token
 WEBDAV_URL=http://localhost:8080
 WEBDAV_USERNAME=zotero
 WEBDAV_PASSWORD=changeme123
+
+# External attachment storage - synced by the provider desktop app, never Git/LFS
+STORAGE_PROVIDER=$provider
+ZOTERO_STORAGE_PATH=$storage_path
+STORAGE_SHARE_URL=$share_url
 EOF
 
   chmod 600 .env.local
@@ -64,6 +84,9 @@ EOF
   export GITHUB_USERNAME="$github_user"
   export GITHUB_EMAIL="$github_email"
   export GITHUB_TOKEN="$github_token"
+  export STORAGE_PROVIDER="$provider"
+  export ZOTERO_STORAGE_PATH="$storage_path"
+  export STORAGE_SHARE_URL="$share_url"
   ok ".env.local erstellt und Git-Benutzer gesetzt"
 }
 
@@ -320,12 +343,16 @@ webdav_ready() {
 start_webdav() {
   step "[6/7] WebDAV Container starten"
 
-  mkdir -p data
+  local storage_path="${ZOTERO_STORAGE_PATH:-$SCRIPT_DIR/data}"
+  if [[ "$storage_path" != /* ]]; then storage_path="$SCRIPT_DIR/$storage_path"; fi
+  export ZOTERO_STORAGE_PATH="$storage_path"
+  mkdir -p "$storage_path/Projekte"
+  info "Externer Speicher: $storage_path"
 
   # Load WebDAV credentials for docker-compose env substitution
   if [ -f ".env.local" ]; then
     while IFS='=' read -r key value; do
-      case "$key" in WEBDAV_USERNAME|WEBDAV_PASSWORD) export "$key=$value" ;; esac
+      case "$key" in WEBDAV_USERNAME|WEBDAV_PASSWORD|ZOTERO_STORAGE_PATH) export "$key=$value" ;; esac
     done < .env.local
   fi
 
@@ -369,12 +396,12 @@ start_auto_sync() {
   else
     if command -v pwsh >/dev/null 2>&1; then
       nohup pwsh -NoProfile -File "$SCRIPT_DIR/auto-sync.ps1" \
-        -WatchPath "$SCRIPT_DIR/data" -Push \
+        -WatchPath "${ZOTERO_STORAGE_PATH:-$SCRIPT_DIR/data}" \
         > "$SCRIPT_DIR/auto-sync.log" 2>&1 &
       ok "Auto-Sync gestartet via pwsh (PID: $!)"
     else
       chmod +x "$SCRIPT_DIR/auto-sync.sh"
-      PUSH=1 nohup "$SCRIPT_DIR/auto-sync.sh" data \
+      nohup "$SCRIPT_DIR/auto-sync.sh" "${ZOTERO_STORAGE_PATH:-$SCRIPT_DIR/data}" \
         > "$SCRIPT_DIR/auto-sync.log" 2>&1 &
       ok "Auto-Sync gestartet via bash (PID: $!)"
     fi

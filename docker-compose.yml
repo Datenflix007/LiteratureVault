@@ -9,5 +9,9 @@ services:
       AUTH_TYPE: Basic
       USERNAME: ${WEBDAV_USERNAME:-zotero}
       PASSWORD: ${WEBDAV_PASSWORD:-changeme123}
+    # The host folder is deliberately outside the repository.  Point this at a
+    # folder synced by OneDrive, Nextcloud Desktop or Dropbox (see .env.local).
     volumes:
-      - ./data:/var/lib/dav/data
+      - type: bind
+        source: ${ZOTERO_STORAGE_PATH:-./data}
+        target: /var/lib/dav/data

@@ -1,0 +1,12 @@
+# Private configuration and runtime state
+.env.local
+.sync-log.json
+*.log
+
+# Zotero attachment data must never be committed or sent to Git LFS.
+data/
+
+# Build artefacts
+dist/
+
+TODO.md
