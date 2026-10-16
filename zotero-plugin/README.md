@@ -1,6 +1,7 @@
 # MyLiteratureVault Zotero Plugin
 
-Dieses Plugin zeigt die lokale MyLiteratureVault UI in Zotero an.
+Dieses Plugin zeigt die lokale MyLiteratureVault UI in Zotero an und legt die
+Projektstruktur als echte Zotero-Sammlungen an.
 
 Voraussetzung:
 
@@ -28,4 +29,19 @@ Danach in Zotero:
 
 ```text
 View -> MyLiteratureVault oeffnen
+```
+
+Projekt-Sammlungen erscheinen unter:
+
+```text
+Projekte · MyLiteratureVault
+  Projektname
+    Literatur
+    Quellen
+```
+
+Beim Start gleicht das Plugin die Projekte ab. Fuer einen sofortigen Abgleich:
+
+```text
+Ansicht -> MyLiteratureVault-Projekte mit Zotero synchronisieren
 ```

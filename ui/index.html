@@ -3,46 +3,159 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MyLiteratureVault</title>
+  <title>MyLiteratureVault · Forschungs-Workspace</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Hauptnavigation">
     <div class="brand">
-      <div class="mark"></div>
-      <div><strong>MyLiteratureVault</strong><span id="repoName">Externer Speicher</span></div>
-      <button id="sidebarToggle" title="Sidebar einklappen">←</button>
+      <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="brand-copy"><strong>MyLiteratureVault</strong><span id="repoName">Forschungs-Workspace</span></div>
+      <button id="sidebarToggle" class="icon-button" type="button" aria-label="Navigation einklappen" title="Navigation einklappen">←</button>
     </div>
     <nav>
-      <button class="nav active" data-view="projects">Projekte</button>
-      <button class="nav" data-view="graph">Aktivität</button>
-      <button class="nav" data-view="pulls">Pull Requests</button>
+      <button class="nav active" type="button" data-view="overview"><span class="nav-icon">◈</span><span>Übersicht</span></button>
+      <button class="nav" type="button" data-view="workspace"><span class="nav-icon">▤</span><span>Projekt-Workspace</span></button>
+      <button class="nav" type="button" data-view="activity"><span class="nav-icon">⌁</span><span>Aktivität</span></button>
+      <button class="nav" type="button" data-view="pulls"><span class="nav-icon">↗</span><span>Pull Requests</span></button>
     </nav>
+    <section class="sidebar-projects" aria-labelledby="sidebarProjectsHeading">
+      <div class="side-label" id="sidebarProjectsHeading">PROJEKTE</div>
+      <div id="sidebarProjects"></div>
+    </section>
     <div class="sidebar-footer">
-      <button id="pullBtn">Code pullen</button>
-      <button id="commitBtn">Code committen</button>
-      <button id="settingsBtn">Speicher</button>
-      <button id="stopServerBtn" class="btn-danger">Server stoppen</button>
+      <button id="pullBtn" type="button">Code pullen</button>
+      <button id="commitBtn" type="button">Code committen</button>
+      <button id="settingsBtn" type="button">Speicher &amp; Dienste</button>
+      <button id="stopServerBtn" type="button" class="btn-danger">Server stoppen</button>
     </div>
   </aside>
-  <div class="resize-handle" id="resizeHandle"></div>
+  <div class="resize-handle" id="resizeHandle" aria-hidden="true"></div>
+
   <main>
     <header class="topbar">
-      <div><h1 id="viewTitle">Projektbereiche</h1><p id="statusLine">Lade Speicherstatus...</p></div>
-      <div class="badges"><span id="storageBadge">Speicher</span><span id="syncBadge">Code</span></div>
+      <div>
+        <p class="eyebrow" id="viewEyebrow">FORSCHEN · ORDNEN · SCHREIBEN</p>
+        <h1 id="viewTitle">Forschungsübersicht</h1>
+        <p id="statusLine">Lade Speicherstatus …</p>
+      </div>
+      <div class="badges" aria-live="polite">
+        <span id="zoteroBadge">Zotero wird geprüft</span>
+        <span id="storageBadge">Speicher</span>
+        <span id="syncBadge">Code</span>
+      </div>
     </header>
-    <section id="projectsView" class="view active">
-      <div class="storage-hero"><div><span class="eyebrow">ZOTERO · CLOUD · PROJEKTE</span><h2>Ein Platz für Literatur, Quellen und Aufgaben.</h2><p>Jedes Projekt erhält im externen Cloud-Ordner automatisch eigene Bereiche. Dateien bleiben außerhalb von Git und Git LFS.</p></div><button id="newProjectBtn" class="primary-btn">+ Projekt anlegen</button></div>
+
+    <section id="overviewView" class="view active">
+      <div class="workspace-hero">
+        <div class="hero-copy">
+          <p class="eyebrow">DEIN WISSENSCHAFTLICHER ARBEITSPLATZ</p>
+          <h2>Vom ersten Gedanken bis zum fertigen Paper.</h2>
+          <p>Projekte, Forschungsfragen, verknüpfte Zotero-Literatur und ausführliche Arbeitsaufgaben bleiben gemeinsam im externen Cloud-Ordner – nie in Git oder Git LFS.</p>
+          <div class="hero-actions">
+            <button id="newProjectBtn" type="button" class="primary-btn">+ Forschungsprojekt anlegen</button>
+            <button type="button" class="secondary-btn" data-view="workspace">Letztes Projekt öffnen</button>
+          </div>
+        </div>
+        <div class="hero-map" aria-label="Projektstruktur">
+          <div class="hero-node root-node">Projekt</div>
+          <div class="hero-branches">
+            <div class="hero-node">Forschungsfrage</div>
+            <div class="hero-node">Literatur</div>
+            <div class="hero-node">Quellen</div>
+            <div class="hero-node">Aufgaben</div>
+          </div>
+          <p>lokal · verknüpft · synchronisiert</p>
+        </div>
+      </div>
+      <div id="overviewMetrics" class="metric-grid" aria-label="Projektkennzahlen"></div>
+      <div class="section-heading">
+        <div><p class="eyebrow">PORTFOLIO</p><h2>Deine Forschungsprojekte</h2></div>
+        <button type="button" class="text-btn" data-new-project>Neues Projekt</button>
+      </div>
       <div id="projectsList" class="project-grid"></div>
     </section>
-    <section id="graphView" class="view"><div class="panel graph-panel"><div class="panel-head"><h2>Code & Speicher-Aktivität</h2><button id="refreshGraph">Aktualisieren</button></div><div id="commitGraph" class="commit-graph"></div></div></section>
-    <section id="pullsView" class="view"><div class="panel"><div class="panel-head"><h2>Pull Requests</h2><button id="refreshPulls">Aktualisieren</button></div><div id="pullsList" class="cards"></div></div></section>
+
+    <section id="workspaceView" class="view">
+      <div id="workspaceEmpty" class="empty-workspace">
+        <span class="empty-icon">◈</span>
+        <h2>Wähle ein Forschungsprojekt</h2>
+        <p>Öffne ein Projekt aus der Übersicht. Dort verwaltest du Forschungsfrage, Literatur, Quellen und Arbeitsschritte.</p>
+        <button type="button" class="primary-btn" data-view="overview">Zur Übersicht</button>
+      </div>
+      <div id="workspaceContent" hidden>
+        <div class="workspace-toolbar">
+          <button type="button" class="back-btn" data-view="overview">← Alle Projekte</button>
+          <div class="workspace-toolbar-actions">
+            <button id="editProjectBtn" type="button" class="secondary-btn">Projektbrief bearbeiten</button>
+            <button id="newTaskBtn" type="button" class="primary-btn">+ Aufgabe</button>
+          </div>
+        </div>
+        <div id="projectWorkspace"></div>
+      </div>
+    </section>
+
+    <section id="activityView" class="view">
+      <div class="panel"><div class="panel-head"><div><p class="eyebrow">NACHVOLLZIEHBARKEIT</p><h2>Code &amp; Speicher-Aktivität</h2></div><button id="refreshActivity" type="button" class="secondary-btn">Aktualisieren</button></div><div id="commitGraph" class="commit-graph"></div></div>
+    </section>
+    <section id="pullsView" class="view">
+      <div class="panel"><div class="panel-head"><div><p class="eyebrow">CODE-KOLLABORATION</p><h2>Pull Requests</h2></div><button id="refreshPulls" type="button" class="secondary-btn">Aktualisieren</button></div><div id="pullsList" class="cards"></div></div>
+    </section>
   </main>
-  <dialog id="newProjectDialog"><form method="dialog" class="dialog-body"><h2>Neues Projekt</h2><p class="hint">Es entstehen <code>Projekte/Projektname/Literatur</code> und <code>Quellen</code> im Cloud-Ordner.</p><label>Projektname <span class="required">*</span><input id="newProjectName" placeholder="z. B. Masterarbeit Klimageschichte"></label><div class="dialog-actions"><button value="cancel">Abbrechen</button><button id="newProjectSaveBtn" value="default">Projekt erstellen</button></div></form></dialog>
-  <dialog id="newTodoDialog"><form method="dialog" class="dialog-body"><h2 id="newTodoProjectName">Neues TODO</h2><input id="newTodoProjectId" type="hidden"><label>Titel <span class="required">*</span><input id="newTodoTitle" placeholder="Was ist zu tun?"></label><label>Notiz<textarea id="newTodoBody" rows="4" placeholder="Details, Links oder nächste Schritte..."></textarea></label><div class="dialog-actions"><button value="cancel">Abbrechen</button><button id="newTodoSaveBtn" value="default">TODO anlegen</button></div></form></dialog>
-  <dialog id="commitDialog"><form method="dialog" class="dialog-body"><h2>Code committen</h2><p class="hint">Zotero-Dateien und Cloud-Projekte werden dabei nicht aufgenommen.</p><label>Commit-Nachricht<textarea id="commitMessage" rows="3"></textarea></label><label class="label-inline"><input type="checkbox" id="commitPush" checked> Auch zu GitHub pushen</label><div class="dialog-actions"><button value="cancel" id="commitCancelBtn">Abbrechen</button><button type="button" id="commitSaveBtn">Committen</button></div></form></dialog>
-  <dialog id="settingsDialog"><form method="dialog" class="dialog-body"><h2>Speicher einrichten</h2><p class="hint">Wähle den Ordner, den die OneDrive-, Nextcloud- oder Dropbox-Desktop-App lokal synchronisiert. Ein Freigabelink allein ist kein beschreibbares Laufwerk.</p><label>Anbieter<select id="storageProvider"><option value="onedrive">OneDrive</option><option value="nextcloud">Nextcloud</option><option value="dropbox">Dropbox</option><option value="local">Lokaler Ordner</option></select></label><label>Lokal synchronisierter Ordner <span class="required">*</span><input id="storagePath" placeholder="C:\Users\Name\OneDrive\MyLiteratureVault"></label><label>Freigabelink (optional)<input id="storageShareUrl" type="url" placeholder="https://..."></label><hr><details><summary>GitHub für Code-Synchronisierung</summary><label>GitHub Name<input id="githubUsername" autocomplete="username"></label><label>GitHub E-Mail<input id="githubEmail" autocomplete="email"></label><label>Neuer GitHub Token<input id="githubToken" type="password" placeholder="leer lassen = unverändert"></label><p class="hint" id="tokenHint"></p></details><label>WebDAV URL<input id="webdavUrl"></label><label>WebDAV Benutzer<input id="webdavUsername"></label><label>WebDAV Passwort<input id="webdavPassword" type="password"></label><div class="dialog-actions"><button value="cancel">Abbrechen</button><button id="saveSettingsBtn" value="default">Speichern</button></div></form></dialog>
-  <div id="toast"></div>
+
+  <dialog id="newProjectDialog">
+    <form id="newProjectForm" class="dialog-body">
+      <div><p class="eyebrow">NEUER PROJEKTRAUM</p><h2>Forschungsprojekt anlegen</h2><p class="hint">Im Cloud-Ordner entstehen automatisch <code>Literatur</code> und <code>Quellen</code>. In Zotero wird beim Abgleich die passende Sammlung angelegt.</p></div>
+      <label>Projektname <span class="required">*</span><input id="newProjectName" required placeholder="z. B. Mittelalterliche Stadträume"></label>
+      <label>Forschungsfrage<textarea id="newProjectQuestion" rows="3" placeholder="Welche Frage soll diese Arbeit beantworten?"></textarea></label>
+      <div class="form-two"><label>Arbeitsphase<select id="newProjectStatus"><option value="planning">Konzept</option><option value="research">Recherche</option><option value="writing">Schreiben</option><option value="review">Überarbeitung</option><option value="done">Abgeschlossen</option></select></label><label>Termin<input id="newProjectDeadline" type="date"></label></div>
+      <div class="dialog-actions"><button type="button" class="secondary-btn" data-close="newProjectDialog">Abbrechen</button><button type="submit" class="primary-btn">Projekt erstellen</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="projectDialog">
+    <form id="projectForm" class="dialog-body">
+      <div><p class="eyebrow">PROJEKTBRIEF</p><h2 id="projectDialogTitle">Projekt bearbeiten</h2><p class="hint">Diese Informationen bleiben im externen Projektordner und werden nicht nach GitHub übertragen.</p></div>
+      <label>Projektname <span class="required">*</span><input id="projectName" required></label>
+      <label>Forschungsfrage<textarea id="projectQuestion" rows="3" placeholder="Welche Frage leitest du mit diesem Projekt?"></textarea></label>
+      <label>Arbeitsthese / Ziel<textarea id="projectGoal" rows="3" placeholder="Welche These oder welches Ergebnis möchtest du entwickeln?"></textarea></label>
+      <div class="form-two"><label>Arbeitsphase<select id="projectStatus"><option value="planning">Konzept</option><option value="research">Recherche</option><option value="writing">Schreiben</option><option value="review">Überarbeitung</option><option value="done">Abgeschlossen</option></select></label><label>Termin<input id="projectDeadline" type="date"></label></div>
+      <label>Gliederung / nächster Argumentationsbogen<textarea id="projectOutline" rows="5" placeholder="1. Einleitung&#10;2. Forschungsstand&#10;3. Analyse …"></textarea></label>
+      <label>Private Arbeitsnotizen<textarea id="projectNotes" rows="5" placeholder="Hypothesen, Gesprächsnotizen, offene Gedanken …"></textarea></label>
+      <div class="dialog-actions"><button type="button" class="secondary-btn" data-close="projectDialog">Abbrechen</button><button type="submit" class="primary-btn">Projektbrief speichern</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="taskDialog">
+    <form id="taskForm" class="dialog-body">
+      <input id="taskProjectId" type="hidden"><input id="taskId" type="hidden">
+      <div><p class="eyebrow">FORSCHUNGSAUFGABE</p><h2 id="taskDialogTitle">Neue Aufgabe</h2><p class="hint">Ausführliche Beschreibungen bleiben lokal. GitHub-Issues werden nur durch die separate Schaltfläche veröffentlicht.</p></div>
+      <label>Titel <span class="required">*</span><input id="taskTitle" required placeholder="z. B. Forschungsstand zu Urbanität auswerten"></label>
+      <label>Beschreibung / Arbeitsauftrag<textarea id="taskBody" rows="6" placeholder="Kontext, Methode, erwartetes Ergebnis, Fragen …"></textarea></label>
+      <div class="form-three"><label>Status<select id="taskStatus"><option value="open">Offen</option><option value="in_progress">In Arbeit</option><option value="done">Erledigt</option></select></label><label>Priorität<select id="taskPriority"><option value="high">Hoch</option><option value="normal" selected>Normal</option><option value="low">Niedrig</option></select></label><label>Termin<input id="taskDueDate" type="date"></label></div>
+      <fieldset class="reference-picker"><legend>Verknüpfte Literatur</legend><p class="hint">Wähle bereits zum Projekt hinzugefügte Zotero-Einträge aus.</p><div id="taskReferenceList" class="checkbox-list"></div></fieldset>
+      <div class="dialog-actions"><button type="button" class="secondary-btn" data-close="taskDialog">Abbrechen</button><button type="submit" class="primary-btn">Aufgabe speichern</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="sourceDialog">
+    <form id="sourceForm" class="dialog-body">
+      <input id="sourceProjectId" type="hidden"><input id="sourceZoteroKey" type="hidden">
+      <div><p class="eyebrow">ZOTERO VERKNÜPFEN</p><h2>Literatur oder Quelle hinzufügen</h2><p class="hint">Die Suche liest nur Metadaten aus deinem lokalen Zotero. PDF-Dateien und Anhangspfade bleiben unangetastet.</p></div>
+      <label>Zotero durchsuchen<input id="zoteroSearch" autocomplete="off" placeholder="Mindestens zwei Zeichen eingeben …"></label>
+      <div id="zoteroSearchStatus" class="search-status">Beginne mit einem Titel, Autor oder Stichwort.</div>
+      <div id="zoteroResults" class="zotero-results" aria-live="polite"></div>
+      <div id="sourceSelection" class="source-selection" hidden></div>
+      <div class="form-two"><label>Bereich<select id="sourceKind"><option value="literature">Literatur</option><option value="source">Quellen</option></select></label><label>Eigene Notiz zur Quelle<input id="sourceNote" placeholder="Warum ist sie relevant?"></label></div>
+      <div class="dialog-actions"><button type="button" class="secondary-btn" data-close="sourceDialog">Abbrechen</button><button id="sourceSaveBtn" type="submit" class="primary-btn" disabled>Mit Projekt verknüpfen</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="commitDialog"><form id="commitForm" class="dialog-body"><div><p class="eyebrow">NUR QUELLCODE</p><h2>Code committen</h2><p class="hint">Zotero-Dateien, Cloud-Projekte und Forschungsnotizen werden nicht aufgenommen.</p></div><label>Commit-Nachricht<textarea id="commitMessage" rows="3"></textarea></label><label class="label-inline"><input type="checkbox" id="commitPush" checked> Auch zu GitHub pushen</label><div class="dialog-actions"><button type="button" class="secondary-btn" data-close="commitDialog">Abbrechen</button><button type="submit" class="primary-btn">Committen</button></div></form></dialog>
+
+  <dialog id="settingsDialog"><form id="settingsForm" class="dialog-body"><div><p class="eyebrow">EXTERNER SPEICHER</p><h2>Speicher &amp; Dienste</h2><p class="hint">Wähle einen lokalen Ordner, den OneDrive, Nextcloud oder Dropbox synchronisiert. Ein Freigabelink allein ist kein beschreibbares Laufwerk.</p></div><label>Anbieter<select id="storageProvider"><option value="onedrive">OneDrive</option><option value="nextcloud">Nextcloud</option><option value="dropbox">Dropbox</option><option value="local">Lokaler Ordner</option></select></label><label>Lokal synchronisierter Ordner <span class="required">*</span><input id="storagePath" placeholder="C:\Users\Name\OneDrive\MyLiteratureVault"></label><label>Freigabelink (optional)<input id="storageShareUrl" type="url" placeholder="https://…"></label><hr><details><summary>GitHub für Code und optionale Issues</summary><label>GitHub Name<input id="githubUsername" autocomplete="username"></label><label>GitHub E-Mail<input id="githubEmail" autocomplete="email"></label><label>Neuer GitHub Token<input id="githubToken" type="password" placeholder="leer lassen = unverändert"></label><p class="hint" id="tokenHint"></p></details><label>WebDAV URL<input id="webdavUrl"></label><label>WebDAV Benutzer<input id="webdavUsername"></label><label>WebDAV Passwort<input id="webdavPassword" type="password"></label><div class="dialog-actions"><button type="button" class="secondary-btn" data-close="settingsDialog">Abbrechen</button><button type="submit" class="primary-btn">Speichern</button></div></form></dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
 </body>
 </html>

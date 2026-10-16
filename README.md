@@ -40,6 +40,17 @@ In der Ansicht **Projekte** kann ein Projekt angelegt werden. MyLiteratureVault 
 
 TODOs gehören immer zu genau einem Projekt. Sie werden gemeinsam mit den Projektdaten im externen Speicher abgelegt und deshalb über den Cloud-Desktop-Client synchronisiert, nicht als GitHub Issue und nicht als Git-Datei.
 
+## Zotero-Sammlungen
+
+Das mitgelieferte Zotero-Plugin erstellt zusätzlich echte Sammlungen in Ihrer Zotero-Bibliothek:
+
+    Projekte · MyLiteratureVault/
+      Mein Projekt/
+        Literatur/
+        Quellen/
+
+Die Sammlung wird beim Zotero-Start und danach etwa alle 30 Sekunden mit den Projekten aus der lokalen UI abgeglichen. Im Menü `Ansicht` steht außerdem `MyLiteratureVault-Projekte mit Zotero synchronisieren` für einen sofortigen manuellen Abgleich bereit. Bereits vorhandene Sammlungen werden wiederverwendet; die Synchronisierung löscht niemals eigene Zotero-Sammlungen.
+
 ## Speicher in der UI ändern
 
 1. UI öffnen: http://localhost:8765

@@ -71,10 +71,12 @@ function Get-ProjectStorePath {
 
 function Get-ProjectStore {
     $storePath = Get-ProjectStorePath
-    if (-not (Test-Path -LiteralPath $storePath)) { return [PSCustomObject]@{ version = 1; projects = @() } }
+    if (-not (Test-Path -LiteralPath $storePath)) { return [PSCustomObject]@{ version = 2; projects = @() } }
     try {
         $store = Get-Content -LiteralPath $storePath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($null -eq $store.projects) { $store | Add-Member -NotePropertyName projects -NotePropertyValue @() }
+        if ($null -eq $store.PSObject.Properties["version"]) { $store | Add-Member -NotePropertyName version -NotePropertyValue 2 }
+        foreach ($project in @($store.projects)) { Ensure-ProjectModel $project }
         return $store
     } catch {
         throw "Projektdatei kann nicht gelesen werden: $($_.Exception.Message)"
@@ -83,6 +85,8 @@ function Get-ProjectStore {
 
 function Save-ProjectStore {
     param($Store)
+    $Store.version = 2
+    foreach ($project in @($Store.projects)) { Ensure-ProjectModel $project }
     $storePath = Get-ProjectStorePath
     $Store | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $storePath -Encoding UTF8
 }
@@ -94,10 +98,134 @@ function Get-SafeFolderName {
     return $safe
 }
 
+function Set-ModelProperty {
+    param($Object, [string]$Name, $Value)
+    if ($null -eq $Object.PSObject.Properties[$Name]) {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    } else {
+        $Object.$Name = $Value
+    }
+}
+
+function Get-BodyValue {
+    param($Body, [string]$Name, $Default = "")
+    if ($null -eq $Body) { return $Default }
+    $property = $Body.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $Default }
+    return $property.Value
+}
+
+function Test-BodyProperty {
+    param($Body, [string]$Name)
+    return $null -ne $Body -and $null -ne $Body.PSObject.Properties[$Name]
+}
+
+function Get-NormalizedReferenceKeys {
+    param($Values)
+    $keys = @()
+    foreach ($value in @($Values)) {
+        $key = "$value".Trim().ToUpperInvariant()
+        if ($key -match "^[A-Z0-9]{8}$" -and $keys -notcontains $key) { $keys += $key }
+    }
+    return @($keys)
+}
+
+function Ensure-ProjectModel {
+    param($Project)
+    if ($null -eq $Project) { return }
+    $defaults = [ordered]@{
+        status = "planning"
+        researchQuestion = ""
+        paperGoal = ""
+        abstract = ""
+        notes = ""
+        deadline = ""
+        outline = ""
+        updatedAt = "$($Project.createdAt)"
+        references = @()
+        todos = @()
+    }
+    foreach ($property in $defaults.GetEnumerator()) {
+        if ($null -eq $Project.PSObject.Properties[$property.Key] -or $null -eq $Project.$($property.Key)) {
+            Set-ModelProperty $Project $property.Key $property.Value
+        }
+    }
+    if ("$($Project.status)" -notin @("planning", "research", "writing", "review", "done")) { $Project.status = "planning" }
+
+    $normalizedTodos = @()
+    foreach ($todo in @($Project.todos)) {
+        if ($null -eq $todo) { continue }
+        $todoDefaults = [ordered]@{
+            body = ""
+            status = "open"
+            priority = "normal"
+            dueDate = ""
+            referenceKeys = @()
+            githubIssueNumber = $null
+            githubIssueUrl = ""
+            createdAt = (Get-Date).ToString("o")
+            updatedAt = "$($todo.createdAt)"
+        }
+        foreach ($property in $todoDefaults.GetEnumerator()) {
+            if ($null -eq $todo.PSObject.Properties[$property.Key] -or $null -eq $todo.$($property.Key)) {
+                Set-ModelProperty $todo $property.Key $property.Value
+            }
+        }
+        if ("$($todo.status)" -notin @("open", "in_progress", "done")) {
+            $todo.status = if ("$($todo.status)" -eq "done") { "done" } else { "open" }
+        }
+        if ("$($todo.priority)" -notin @("low", "normal", "high")) { $todo.priority = "normal" }
+        $todo.referenceKeys = Get-NormalizedReferenceKeys $todo.referenceKeys
+        $normalizedTodos += $todo
+    }
+    $Project.todos = @($normalizedTodos)
+
+    $normalizedReferences = @()
+    foreach ($reference in @($Project.references)) {
+        if ($null -eq $reference) { continue }
+        $referenceDefaults = [ordered]@{
+            id = [guid]::NewGuid().ToString("N")
+            zoteroKey = ""
+            kind = "literature"
+            title = "Ohne Titel"
+            creators = ""
+            year = ""
+            itemType = ""
+            doi = ""
+            url = ""
+            note = ""
+            addedAt = (Get-Date).ToString("o")
+        }
+        foreach ($property in $referenceDefaults.GetEnumerator()) {
+            if ($null -eq $reference.PSObject.Properties[$property.Key] -or $null -eq $reference.$($property.Key)) {
+                Set-ModelProperty $reference $property.Key $property.Value
+            }
+        }
+        $reference.zoteroKey = "$($reference.zoteroKey)".Trim().ToUpperInvariant()
+        if ($reference.zoteroKey -notmatch "^[A-Z0-9]{8}$") { continue }
+        if ("$($reference.kind)" -notin @("literature", "source")) { $reference.kind = "literature" }
+        $normalizedReferences += $reference
+    }
+    $Project.references = @($normalizedReferences)
+}
+
 function Get-ProjectSummary {
     param($Project)
+    Ensure-ProjectModel $Project
     $todos = @($Project.todos)
-    return @{ id = $Project.id; name = $Project.name; folderName = $Project.folderName; createdAt = $Project.createdAt; todoCount = $todos.Count; openTodoCount = @($todos | Where-Object { $_.status -ne "done" }).Count; todos = $todos }
+    $references = @($Project.references)
+    $doneTodoCount = @($todos | Where-Object { $_.status -eq "done" }).Count
+    $inProgressTodoCount = @($todos | Where-Object { $_.status -eq "in_progress" }).Count
+    $openTodoCount = @($todos | Where-Object { $_.status -eq "open" }).Count
+    $progress = if ($todos.Count) { [math]::Round(($doneTodoCount / $todos.Count) * 100) } else { 0 }
+    return @{
+        id = $Project.id; name = $Project.name; folderName = $Project.folderName; createdAt = $Project.createdAt; updatedAt = $Project.updatedAt
+        status = $Project.status; researchQuestion = $Project.researchQuestion; paperGoal = $Project.paperGoal; abstract = $Project.abstract
+        notes = $Project.notes; deadline = $Project.deadline; outline = $Project.outline
+        todoCount = $todos.Count; openTodoCount = $openTodoCount; inProgressTodoCount = $inProgressTodoCount; doneTodoCount = $doneTodoCount; progress = $progress
+        referenceCount = $references.Count; literatureCount = @($references | Where-Object { $_.kind -eq "literature" }).Count; sourceCount = @($references | Where-Object { $_.kind -eq "source" }).Count
+        todos = $todos; tasks = $todos; references = $references
+    }
 }
 
 function Get-ProjectById {
@@ -108,7 +236,7 @@ function Get-ProjectById {
 }
 
 function New-Project {
-    param([string]$Name)
+    param([string]$Name, $Body = $null)
     $name = "$Name".Trim()
     if ([string]::IsNullOrWhiteSpace($name)) { throw "Bitte einen Projektnamen eingeben." }
     $store = Get-ProjectStore
@@ -119,21 +247,37 @@ function New-Project {
     $projectRoot = Join-Path (Join-Path (Ensure-StorageRoot) "Projekte") $folderName
     New-Item -ItemType Directory -Path (Join-Path $projectRoot "Literatur") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $projectRoot "Quellen") -Force | Out-Null
-    $project = [PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); name = $name; folderName = $folderName; createdAt = (Get-Date).ToString("o"); todos = @() }
+    $now = (Get-Date).ToString("o")
+    $project = [PSCustomObject]@{
+        id = [guid]::NewGuid().ToString("N"); name = $name; folderName = $folderName; createdAt = $now; updatedAt = $now
+        status = "planning"; researchQuestion = "$(Get-BodyValue $Body 'researchQuestion')".Trim(); paperGoal = "$(Get-BodyValue $Body 'paperGoal')".Trim()
+        abstract = ""; notes = ""; deadline = "$(Get-BodyValue $Body 'deadline')".Trim(); outline = ""; references = @(); todos = @()
+    }
+    if ("$(Get-BodyValue $Body 'status')" -in @("planning", "research", "writing", "review", "done")) { $project.status = "$(Get-BodyValue $Body 'status')" }
     $store.projects = @($store.projects) + @($project)
     Save-ProjectStore $store
     return Get-ProjectSummary $project
 }
 
 function New-ProjectTodo {
-    param([string]$ProjectId, [string]$Title, [string]$Body)
-    $title = "$Title".Trim()
+    param([string]$ProjectId, $Body)
+    $title = "$(Get-BodyValue $Body 'title')".Trim()
     if ([string]::IsNullOrWhiteSpace($title)) { throw "Bitte einen TODO-Titel eingeben." }
     $store = Get-ProjectStore
     $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
     if (-not $project) { throw "Projekt wurde nicht gefunden." }
-    $todo = [PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); title = $title; body = "$Body".Trim(); status = "open"; createdAt = (Get-Date).ToString("o") }
+    $now = (Get-Date).ToString("o")
+    $status = "$(Get-BodyValue $Body 'status' 'open')"
+    if ($status -notin @("open", "in_progress", "done")) { $status = "open" }
+    $priority = "$(Get-BodyValue $Body 'priority' 'normal')"
+    if ($priority -notin @("low", "normal", "high")) { $priority = "normal" }
+    $todo = [PSCustomObject]@{
+        id = [guid]::NewGuid().ToString("N"); title = $title; body = "$(Get-BodyValue $Body 'body')".Trim(); status = $status; priority = $priority
+        dueDate = "$(Get-BodyValue $Body 'dueDate')".Trim(); referenceKeys = Get-NormalizedReferenceKeys (Get-BodyValue $Body 'referenceKeys' @())
+        githubIssueNumber = $null; githubIssueUrl = ""; createdAt = $now; updatedAt = $now
+    }
     $project[0].todos = @($project[0].todos) + @($todo)
+    $project[0].updatedAt = $now
     Save-ProjectStore $store
     return Get-ProjectSummary $project[0]
 }
@@ -145,9 +289,174 @@ function Set-ProjectTodo {
     if (-not $project) { throw "Projekt wurde nicht gefunden." }
     $todo = @($project[0].todos | Where-Object { $_.id -eq $TodoId } | Select-Object -First 1)
     if (-not $todo) { throw "TODO wurde nicht gefunden." }
-    if ($null -ne $Body.title) { $todo[0].title = "$($Body.title)".Trim() }
-    if ($null -ne $Body.body) { $todo[0].body = "$($Body.body)".Trim() }
-    if ("$($Body.status)" -in @("open", "done")) { $todo[0].status = "$($Body.status)" }
+    if (Test-BodyProperty $Body "title") {
+        $title = "$(Get-BodyValue $Body 'title')".Trim()
+        if ([string]::IsNullOrWhiteSpace($title)) { throw "Bitte einen TODO-Titel eingeben." }
+        $todo[0].title = $title
+    }
+    if (Test-BodyProperty $Body "body") { $todo[0].body = "$(Get-BodyValue $Body 'body')".Trim() }
+    if ("$(Get-BodyValue $Body 'status')" -in @("open", "in_progress", "done")) { $todo[0].status = "$(Get-BodyValue $Body 'status')" }
+    if ("$(Get-BodyValue $Body 'priority')" -in @("low", "normal", "high")) { $todo[0].priority = "$(Get-BodyValue $Body 'priority')" }
+    if (Test-BodyProperty $Body "dueDate") { $todo[0].dueDate = "$(Get-BodyValue $Body 'dueDate')".Trim() }
+    if (Test-BodyProperty $Body "referenceKeys") { $todo[0].referenceKeys = Get-NormalizedReferenceKeys (Get-BodyValue $Body 'referenceKeys' @()) }
+    $todo[0].updatedAt = (Get-Date).ToString("o")
+    $project[0].updatedAt = $todo[0].updatedAt
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Set-ProjectDetails {
+    param([string]$ProjectId, $Body)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    foreach ($field in @("researchQuestion", "paperGoal", "abstract", "notes", "deadline", "outline")) {
+        if (Test-BodyProperty $Body $field) { $project[0].$field = "$(Get-BodyValue $Body $field)".Trim() }
+    }
+    if (Test-BodyProperty $Body "name") {
+        $name = "$(Get-BodyValue $Body 'name')".Trim()
+        if ([string]::IsNullOrWhiteSpace($name)) { throw "Bitte einen Projektnamen eingeben." }
+        $project[0].name = $name
+    }
+    if ("$(Get-BodyValue $Body 'status')" -in @("planning", "research", "writing", "review", "done")) { $project[0].status = "$(Get-BodyValue $Body 'status')" }
+    $project[0].updatedAt = (Get-Date).ToString("o")
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Invoke-ZoteroLocalApi {
+    param([string]$Path)
+    Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.UseProxy = $false
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(8)
+    $client.DefaultRequestHeaders.Add("Zotero-API-Version", "3")
+    try {
+        $response = $client.GetAsync("http://127.0.0.1:23119/api$Path").GetAwaiter().GetResult()
+        $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            throw "Zotero antwortet mit HTTP $([int]$response.StatusCode)."
+        }
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        $parsed = $raw | ConvertFrom-Json
+        if ($parsed -is [array]) {
+            foreach ($entry in $parsed) { Write-Output $entry }
+        } else {
+            Write-Output $parsed
+        }
+    } catch {
+        throw "Zotero ist lokal nicht erreichbar. Starte Zotero und aktiviere in Einstellungen → Erweitert den Zugriff für andere Anwendungen. Details: $($_.Exception.Message)"
+    } finally {
+        $client.Dispose()
+        $handler.Dispose()
+    }
+}
+
+function ConvertTo-ProjectReference {
+    param($ZoteroItem)
+    if ($null -eq $ZoteroItem -or $null -eq $ZoteroItem.data) { return $null }
+    $data = $ZoteroItem.data
+    $key = "$($data.key)".Trim().ToUpperInvariant()
+    if ($key -notmatch "^[A-Z0-9]{8}$") { return $null }
+    if ("$($data.itemType)" -in @("attachment", "note", "annotation")) { return $null }
+    $creatorNames = @()
+    foreach ($creator in @($data.creators)) {
+        $name = if ("$($creator.name)".Trim()) { "$($creator.name)" } else { ("$($creator.lastName) $($creator.firstName)").Trim() }
+        if ($name) { $creatorNames += $name }
+    }
+    $year = ""
+    if ("$($data.date)" -match "(?<!\d)(1[5-9]\d{2}|20\d{2})(?!\d)") { $year = $matches[1] }
+    return [PSCustomObject]@{
+        zoteroKey = $key
+        title = if ("$($data.title)".Trim()) { "$($data.title)".Trim() } else { "Ohne Titel" }
+        creators = ($creatorNames -join "; ")
+        year = $year
+        itemType = "$($data.itemType)"
+        doi = "$($data.DOI)".Trim()
+        url = "$($data.url)".Trim()
+        zoteroUri = "zotero://select/library/items/$key"
+    }
+}
+
+function Get-ZoteroStatus {
+    try {
+        $items = @(Invoke-ZoteroLocalApi "/users/0/items/top?format=json&limit=1")
+        return @{ available = $true; message = "Zotero ist lokal verbunden"; sampleCount = $items.Count }
+    } catch {
+        return @{ available = $false; message = "$($_.Exception.Message)" }
+    }
+}
+
+function Get-ZoteroSearchResults {
+    param([string]$Query, [int]$Limit = 20)
+    $query = "$Query".Trim()
+    if ($query.Length -lt 2) { return @() }
+    $safeLimit = [math]::Max(1, [math]::Min(30, $Limit))
+    $encodedQuery = [Uri]::EscapeDataString($query)
+    $items = @(Invoke-ZoteroLocalApi "/users/0/items/top?format=json&limit=$safeLimit&q=$encodedQuery")
+    return @($items | ForEach-Object { ConvertTo-ProjectReference $_ } | Where-Object { $null -ne $_ })
+}
+
+function Get-ZoteroReferenceByKey {
+    param([string]$ZoteroKey)
+    $key = "$ZoteroKey".Trim().ToUpperInvariant()
+    if ($key -notmatch "^[A-Z0-9]{8}$") { throw "Ungültiger Zotero-Schlüssel." }
+    $item = Invoke-ZoteroLocalApi "/users/0/items/${key}?format=json"
+    $reference = ConvertTo-ProjectReference $item
+    if ($null -eq $reference) { throw "Der gewählte Zotero-Eintrag kann nicht als Literatur oder Quelle verknüpft werden." }
+    return $reference
+}
+
+function Add-ProjectReference {
+    param([string]$ProjectId, $Body)
+    $key = "$(Get-BodyValue $Body 'zoteroKey')".Trim().ToUpperInvariant()
+    $reference = Get-ZoteroReferenceByKey $key
+    $kind = "$(Get-BodyValue $Body 'kind' 'literature')"
+    if ($kind -notin @("literature", "source")) { $kind = "literature" }
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $existing = @($project[0].references | Where-Object { $_.zoteroKey -eq $key } | Select-Object -First 1)
+    if ($existing) {
+        $existing[0].kind = $kind
+        if (Test-BodyProperty $Body "note") { $existing[0].note = "$(Get-BodyValue $Body 'note')".Trim() }
+    } else {
+        $entry = [PSCustomObject]@{
+            id = [guid]::NewGuid().ToString("N"); zoteroKey = $reference.zoteroKey; kind = $kind; title = $reference.title
+            creators = $reference.creators; year = $reference.year; itemType = $reference.itemType; doi = $reference.doi; url = $reference.url
+            note = "$(Get-BodyValue $Body 'note')".Trim(); addedAt = (Get-Date).ToString("o")
+        }
+        $project[0].references = @($project[0].references) + @($entry)
+    }
+    $project[0].updatedAt = (Get-Date).ToString("o")
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Set-ProjectReference {
+    param([string]$ProjectId, [string]$ReferenceId, $Body)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $reference = @($project[0].references | Where-Object { $_.id -eq $ReferenceId } | Select-Object -First 1)
+    if (-not $reference) { throw "Verknüpfte Zotero-Quelle wurde nicht gefunden." }
+    if ("$(Get-BodyValue $Body 'kind')" -in @("literature", "source")) { $reference[0].kind = "$(Get-BodyValue $Body 'kind')" }
+    if (Test-BodyProperty $Body "note") { $reference[0].note = "$(Get-BodyValue $Body 'note')".Trim() }
+    $project[0].updatedAt = (Get-Date).ToString("o")
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Remove-ProjectReference {
+    param([string]$ProjectId, [string]$ReferenceId)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $before = @($project[0].references).Count
+    $project[0].references = @($project[0].references | Where-Object { $_.id -ne $ReferenceId })
+    if ($project[0].references.Count -eq $before) { throw "Verknüpfte Zotero-Quelle wurde nicht gefunden." }
+    $project[0].updatedAt = (Get-Date).ToString("o")
     Save-ProjectStore $store
     return Get-ProjectSummary $project[0]
 }
@@ -202,13 +511,54 @@ function Invoke-GitHub {
     return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers
 }
 
+function Publish-ProjectTodoIssue {
+    param([string]$ProjectId, [string]$TodoId)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $todo = @($project[0].todos | Where-Object { $_.id -eq $TodoId } | Select-Object -First 1)
+    if (-not $todo) { throw "TODO wurde nicht gefunden." }
+    if ($todo[0].githubIssueUrl) { return Get-ProjectSummary $project[0] }
+
+    $linkedReferences = @($project[0].references | Where-Object { $todo[0].referenceKeys -contains $_.zoteroKey })
+    $referenceBlock = if ($linkedReferences.Count) {
+        "`n## Verknüpfte Zotero-Literatur`n" + (($linkedReferences | ForEach-Object { "- $($_.title) (Zotero: $($_.zoteroKey))" }) -join "`n")
+    } else { "" }
+    $issueBody = @(
+        "<!-- myliteraturevault-project:$ProjectId todo:$TodoId -->"
+        "## Forschungsaufgabe"
+        ""
+        "**Projekt:** $($project[0].name)"
+        "**Priorität:** $($todo[0].priority)"
+        "**Status:** $($todo[0].status)"
+        ""
+        "$($todo[0].body)"
+        $referenceBlock
+        ""
+        "_Erstellt aus MyLiteratureVault. Die vollständigen privaten Forschungsnotizen bleiben im externen Projektordner._"
+    ) -join "`n"
+    $label = "mvl-project-$ProjectId"
+    try {
+        Invoke-GitHub "POST" "/labels" @{ name = $label; color = "1f6feb"; description = "MyLiteratureVault: $($project[0].name)" } | Out-Null
+    } catch {
+        # A label that already exists produces a validation response; the issue request below remains authoritative.
+    }
+    $issue = Invoke-GitHub "POST" "/issues" @{ title = "[$($project[0].name)] $($todo[0].title)"; body = $issueBody; labels = @($label, "myliteraturevault") }
+    $todo[0].githubIssueNumber = $issue.number
+    $todo[0].githubIssueUrl = $issue.html_url
+    $todo[0].updatedAt = (Get-Date).ToString("o")
+    $project[0].updatedAt = $todo[0].updatedAt
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
 function Send-Response {
     param($Context, [int]$Status, [string]$Body, [string]$ContentType = "application/json")
     $bytes = [Text.Encoding]::UTF8.GetBytes($Body)
     $Context.Response.StatusCode = $Status
     $Context.Response.ContentType = "$ContentType; charset=utf-8"
     $Context.Response.Headers.Add("Access-Control-Allow-Origin", "*")
-    $Context.Response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+    $Context.Response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
     $Context.Response.Headers.Add("Access-Control-Allow-Headers", "Content-Type")
     $Context.Response.ContentLength64 = $bytes.Length
     $Context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -217,7 +567,7 @@ function Send-Response {
 
 function Send-Json {
     param($Context, $Object, [int]$Status = 200)
-    Send-Response $Context $Status ($Object | ConvertTo-Json -Depth 20)
+    Send-Response $Context $Status (ConvertTo-Json -InputObject $Object -Depth 20)
 }
 
 function Read-JsonBody {
@@ -275,6 +625,13 @@ function Handle-Api {
         if ($method -eq "OPTIONS") { Send-Response $Context 204 "" "text/plain"; return }
         if ($Path -eq "/api/status") { Send-Json $Context (Get-Status); return }
         if ($Path -eq "/api/log") { Send-Json $Context (Get-Log); return }
+        if ($Path -eq "/api/zotero/status" -and $method -eq "GET") { Send-Json $Context (Get-ZoteroStatus); return }
+        if ($Path -eq "/api/zotero/items" -and $method -eq "GET") {
+            $limit = 20
+            [void][int]::TryParse("$($Context.Request.QueryString["limit"])", [ref]$limit)
+            Send-Json $Context @(Get-ZoteroSearchResults "$($Context.Request.QueryString["q"])" $limit)
+            return
+        }
         if ($Path -eq "/api/pull" -and $method -eq "POST") { Send-Json $Context (Pull-RemoteUpdates); return }
         if ($Path -eq "/api/settings" -and $method -eq "GET") {
             $env = Import-EnvFile
@@ -367,16 +724,40 @@ function Handle-Api {
         }
         if ($Path -eq "/api/projects" -and $method -eq "POST") {
             $body = Read-JsonBody $Context.Request
-            Send-Json $Context (New-Project "$($body.name)") 201
+            Send-Json $Context (New-Project "$(Get-BodyValue $body 'name')" $body) 201
             return
         }
-        if ($Path -match "^/api/projects/([a-f0-9]{32})/todos$" -and $method -eq "POST") {
+        if ($Path -match "^/api/projects/([a-f0-9]{32})$" -and $method -eq "GET") {
+            Send-Json $Context (Get-ProjectSummary (Get-ProjectById $matches[1]))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})$" -and $method -eq "PATCH") {
+            Send-Json $Context (Set-ProjectDetails $matches[1] (Read-JsonBody $Context.Request))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/references$" -and $method -eq "POST") {
+            Send-Json $Context (Add-ProjectReference $matches[1] (Read-JsonBody $Context.Request)) 201
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/references/([a-f0-9]{32})$" -and $method -eq "PATCH") {
+            Send-Json $Context (Set-ProjectReference $matches[1] $matches[2] (Read-JsonBody $Context.Request))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/references/([a-f0-9]{32})$" -and $method -eq "DELETE") {
+            Send-Json $Context (Remove-ProjectReference $matches[1] $matches[2])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/(todos|tasks)$" -and $method -eq "POST") {
             $body = Read-JsonBody $Context.Request
-            Send-Json $Context (New-ProjectTodo $matches[1] "$($body.title)" "$($body.body)") 201
+            Send-Json $Context (New-ProjectTodo $matches[1] $body) 201
             return
         }
-        if ($Path -match "^/api/projects/([a-f0-9]{32})/todos/([a-f0-9]{32})$" -and $method -eq "PATCH") {
-            Send-Json $Context (Set-ProjectTodo $matches[1] $matches[2] (Read-JsonBody $Context.Request))
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/(todos|tasks)/([a-f0-9]{32})/github-issue$" -and $method -eq "POST") {
+            Send-Json $Context (Publish-ProjectTodoIssue $matches[1] $matches[3])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/(todos|tasks)/([a-f0-9]{32})$" -and $method -eq "PATCH") {
+            Send-Json $Context (Set-ProjectTodo $matches[1] $matches[3] (Read-JsonBody $Context.Request))
             return
         }
         if ($Path -eq "/api/issues" -and $method -eq "POST") {
