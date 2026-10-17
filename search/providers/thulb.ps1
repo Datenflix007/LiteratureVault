@@ -1,4 +1,4 @@
-function ConvertTo-ThulbCql {
+﻿function ConvertTo-ThulbCql {
     param($Request)
     $query = (Get-ResearchQueryText $Request).Trim()
     if (-not $query) { return "" }

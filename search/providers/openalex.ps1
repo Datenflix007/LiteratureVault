@@ -1,4 +1,4 @@
-function ConvertFrom-OpenAlexAbstract {
+﻿function ConvertFrom-OpenAlexAbstract {
     param($InvertedIndex)
     if ($null -eq $InvertedIndex) { return "" }
     $words = @{}

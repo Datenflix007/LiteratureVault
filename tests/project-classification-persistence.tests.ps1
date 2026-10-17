@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $vaultPath = Join-Path $repoRoot 'vault-ui.ps1'
 $source = Get-Content -LiteralPath $vaultPath -Raw -Encoding UTF8

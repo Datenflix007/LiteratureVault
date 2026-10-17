@@ -1,4 +1,4 @@
-#!/usr/bin/env powershell
+﻿#!/usr/bin/env powershell
 param(
     [string]$WatchPath = "",
     [int]$IntervalSeconds = 5

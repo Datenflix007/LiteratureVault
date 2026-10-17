@@ -1,4 +1,4 @@
-#!/usr/bin/env powershell
+﻿#!/usr/bin/env powershell
 param(
     [int]$Port = 8765,
     [switch]$OpenBrowser
@@ -292,7 +292,13 @@ function Get-SavedResearchResults {
         $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
         if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
         $parsed = $raw | ConvertFrom-Json
-        return @($parsed | Where-Object { $null -ne $_ -and "$(Get-BodyValue $_ 'resultId')".Trim() })
+        $results = @($parsed | Where-Object { $null -ne $_ -and "$(Get-BodyValue $_ 'resultId')".Trim() })
+        $changed = $false
+        foreach ($result in $results) {
+            if (Repair-NormalizedResearchResultEncoding $result) { $changed = $true }
+        }
+        if ($changed) { Save-SavedResearchResults -Results $results }
+        return $results
     } catch {
         throw "Die Merkliste konnte nicht gelesen werden: $($_.Exception.Message)"
     }

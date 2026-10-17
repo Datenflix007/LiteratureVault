@@ -1,4 +1,4 @@
-# Scientific research search service. Provider adapters are intentionally kept
+﻿# Scientific research search service. Provider adapters are intentionally kept
 # separate so that an unavailable or licensed portal cannot affect the others.
 
 $script:ResearchProviderDefinitions = @(
@@ -40,12 +40,56 @@ function Invoke-ResearchHttpGet {
         $client.Timeout = [TimeSpan]::FromSeconds(15)
         [void]$client.DefaultRequestHeaders.UserAgent.ParseAdd("MyLiteratureVault/0.5 (local research metadata client)")
         $response = $client.GetAsync($Uri).GetAwaiter().GetResult()
-        $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if (-not $response.IsSuccessStatusCode) { throw "HTTP $([int]$response.StatusCode) von $Uri" }
-        return $body
+        # Several SRU catalogues send XML without a charset header. HttpClient
+        # then assumes ISO-8859-1 although the document is UTF-8, producing
+        # strings such as "FlachdÃ¤cher". Metadata APIs in this application
+        # use UTF-8; honour an explicit charset but default to UTF-8 otherwise.
+        $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        $charset = "$($response.Content.Headers.ContentType.CharSet)".Trim().Trim('"')
+        $encoding = [Text.Encoding]::UTF8
+        if ($charset) {
+            try { $encoding = [Text.Encoding]::GetEncoding($charset) } catch { $encoding = [Text.Encoding]::UTF8 }
+        }
+        return $encoding.GetString($bytes)
     } finally {
         $client.Dispose(); $handler.Dispose()
     }
+}
+
+function Repair-ResearchTextEncoding {
+    param([AllowNull()][string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    # Only touch recognisable UTF-8-as-Windows-1252 artefacts. This keeps
+    # legitimate names with characters such as Å unchanged.
+    $marker = '(?:\xC3[\x80-\xBF]|\xC2[\x80-\xBF]|\xE2[\x80-\xBF]{1,2}|\xC5[\x80-\xBF])'
+    if ($Value -notmatch $marker) { return $Value }
+    try {
+        $candidate = [Text.Encoding]::UTF8.GetString([Text.Encoding]::GetEncoding(1252).GetBytes($Value))
+        if ($candidate -and $candidate -notmatch $marker -and $candidate -notmatch [string][char]0xfffd) { return $candidate }
+    } catch { }
+    return $Value
+}
+
+function Repair-NormalizedResearchResultEncoding {
+    param($Result)
+    if ($null -eq $Result) { return $false }
+    $changed = $false
+    foreach ($field in @('title', 'subtitle', 'publicationType', 'abstract', 'language', 'doi', 'sourceUrl', 'fulltextUrl', 'publisher', 'availability', 'sourceYear', 'sourceDate')) {
+        $property = $Result.PSObject.Properties[$field]
+        if ($null -eq $property) { continue }
+        $repaired = Repair-ResearchTextEncoding "$($property.Value)"
+        if ($repaired -cne "$($property.Value)") { $property.Value = $repaired; $changed = $true }
+    }
+    foreach ($field in @('authors', 'keywords', 'isbn', 'issn')) {
+        $property = $Result.PSObject.Properties[$field]
+        if ($null -eq $property) { continue }
+        $values = @($property.Value)
+        $repaired = @($values | ForEach-Object { Repair-ResearchTextEncoding "$_" })
+        $separator = [string][char]0x1f
+        if (($values -join $separator) -cne ($repaired -join $separator)) { $property.Value = $repaired; $changed = $true }
+    }
+    return $changed
 }
 
 function Get-ResearchCachePath {
@@ -58,6 +102,13 @@ function Get-ResearchCache {
     try {
         $cache = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($null -eq $cache.entries) { $cache | Add-Member -NotePropertyName entries -NotePropertyValue @() }
+        $changed = $false
+        foreach ($entry in @($cache.entries)) {
+            foreach ($result in @($entry.response.results)) {
+                if (Repair-NormalizedResearchResultEncoding $result) { $changed = $true }
+            }
+        }
+        if ($changed) { Save-ResearchCache $cache }
         return $cache
     } catch {
         return [PSCustomObject]@{ version = 1; entries = @() }
@@ -154,6 +205,21 @@ function New-NormalizedResearchResult {
         [string]$OpenAccessStatus = "unknown", [string]$Publisher = "", [string]$Availability = "nicht ermittelt",
         [string]$SourceYear = "", [string]$SourceDate = ""
     )
+    $Title = Repair-ResearchTextEncoding $Title
+    $Authors = @($Authors | ForEach-Object { Repair-ResearchTextEncoding "$_" })
+    $PublicationType = Repair-ResearchTextEncoding $PublicationType
+    $Abstract = Repair-ResearchTextEncoding $Abstract
+    $Keywords = @($Keywords | ForEach-Object { Repair-ResearchTextEncoding "$_" })
+    $Language = Repair-ResearchTextEncoding $Language
+    $Doi = Repair-ResearchTextEncoding $Doi
+    $Isbn = @($Isbn | ForEach-Object { Repair-ResearchTextEncoding "$_" })
+    $Issn = @($Issn | ForEach-Object { Repair-ResearchTextEncoding "$_" })
+    $SourceUrl = Repair-ResearchTextEncoding $SourceUrl
+    $FulltextUrl = Repair-ResearchTextEncoding $FulltextUrl
+    $Publisher = Repair-ResearchTextEncoding $Publisher
+    $Availability = Repair-ResearchTextEncoding $Availability
+    $SourceYear = Repair-ResearchTextEncoding $SourceYear
+    $SourceDate = Repair-ResearchTextEncoding $SourceDate
     $doiValue = "$Doi".Trim() -replace "^https?://(dx\.)?doi\.org/", ""
     $fingerprint = if ($doiValue) { "doi:$($doiValue.ToLowerInvariant())" } elseif ($Isbn.Count) { "isbn:$((@($Isbn)[0] -replace '[^0-9Xx]', '').ToUpperInvariant())" } else { "title:$((ConvertTo-ResearchTokens $Title) -join '-')|author:$((ConvertTo-ResearchTokens (@($Authors)[0])) -join '-')|year:$PublicationYear" }
     $hash = [Security.Cryptography.SHA1]::Create()

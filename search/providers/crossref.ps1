@@ -1,4 +1,4 @@
-function Get-CrossrefYear {
+﻿function Get-CrossrefYear {
     param($Item)
     foreach ($field in @('published-print', 'published-online', 'published', 'issued', 'created')) {
         $value = $Item.PSObject.Properties[$field].Value

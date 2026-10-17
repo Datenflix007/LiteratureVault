@@ -1,4 +1,4 @@
-function ConvertTo-DnbCql {
+﻿function ConvertTo-DnbCql {
     param($Request)
     $query = (Get-ResearchQueryText $Request) -replace '"', ''
     if ([string]::IsNullOrWhiteSpace($query)) { return "" }

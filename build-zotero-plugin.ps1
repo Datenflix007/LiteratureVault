@@ -1,4 +1,4 @@
-#!/usr/bin/env powershell
+﻿#!/usr/bin/env powershell
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
 $PluginDir = Join-Path $ScriptDir "zotero-plugin"
