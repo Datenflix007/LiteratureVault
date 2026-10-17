@@ -10,20 +10,6 @@ WebDAV-Speicher. Literatur, Quellen, Aufgaben und Projektordner bleiben dabei
 auf Ihrem Rechner bzw. in Ihrem bereits synchronisierten Cloud-Ordner – nicht
 in GitHub und nicht in Git LFS.
 
-> Die folgenden Bilder sind anonymisierte Beispielansichten der Anwendung. Sie
-> enthalten keine lokalen Pfade, Projekte oder Forschungsdaten.
-
-![Beispielansicht der Metasuche](docs/screenshots/01-recherche.svg)
-
-## In drei Sätzen
-
-1. Sie legen ein Forschungsprojekt in der Oberfläche an.
-2. Das Zotero-Plugin erzeugt dazu unter **Meine Bibliothek** eine Sammlung mit
-   **Literatur** und **Quellen**.
-3. Sie recherchieren Metadaten, merken Treffer vor und importieren sie als
-   Literatur oder Quelle in das gewählte Projekt.
-
-## Schnellstart für Windows
 
 ### Was Sie vorher brauchen
 
@@ -192,7 +178,6 @@ Volltext-URL übergeben. Bereits vorhandene DOI-Einträge werden wiederverwendet
 Geschützte PDFs werden weder heruntergeladen noch kopiert; ihre URL bleibt aber
 als Nachweis verfügbar.
 
-![Beispielansicht eines Projekts mit Quellenregal](docs/screenshots/02-projekt-zotero.svg)
 
 ### Im Projekt weiterarbeiten
 
