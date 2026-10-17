@@ -16,8 +16,11 @@ function ConvertTo-DnbCql {
 function Get-DnbMarcValues {
     param($Record, [string]$Tag, [string[]]$Codes)
     $values = @()
-    foreach ($field in @($Record.datafield | Where-Object { $_.tag -eq $Tag })) {
-        foreach ($subfield in @($field.subfield | Where-Object { $Codes -contains "$($_.code)" })) { if ("$subfield".Trim()) { $values += "$subfield".Trim() } }
+    foreach ($field in @($Record.SelectNodes("./*[local-name()='datafield'][@tag='$Tag']"))) {
+        foreach ($subfield in @($field.SelectNodes("./*[local-name()='subfield']") | Where-Object { $Codes -contains "$($_.GetAttribute('code'))" })) {
+            $value = "$($subfield.InnerText)".Trim()
+            if ($value) { $values += $value }
+        }
     }
     return @($values | Select-Object -Unique)
 }
@@ -26,7 +29,7 @@ function Invoke-DnbResearchProvider {
     param($Request)
     $cql = ConvertTo-DnbCql $Request
     if (-not $cql) { return @() }
-    $count = [math]::Min([int]$Request.limit, 50)
+    $count = [math]::Min([int]$Request.limit, 100)
     $uri = "https://services.dnb.de/sru/dnb?version=1.1&operation=searchRetrieve&recordSchema=MARC21-xml&maximumRecords=$count&query=$([uri]::EscapeDataString($cql))"
     [xml]$xml = Invoke-ResearchHttpGet $uri
     $manager = [System.Xml.XmlNamespaceManager]::new($xml.NameTable)
@@ -42,7 +45,7 @@ function Invoke-DnbResearchProvider {
         $issn = Get-DnbMarcValues $record '022' @('a')
         $keywords = @(Get-DnbMarcValues $record '650' @('a', 'x', 'y')) + @(Get-DnbMarcValues $record '653' @('a'))
         $publisher = @(Get-DnbMarcValues $record '264' @('b'))[0]
-        $sourceUrl = if ($id) { "https://portal.dnb.de/opac.htm?method=showFullRecord&currentResultId=$id%26any&currentPosition=1" } else { "https://portal.dnb.de/" }
+        $sourceUrl = $(if ($id) { "https://portal.dnb.de/opac.htm?method=showFullRecord&currentResultId=$id%26any&currentPosition=1" } else { "https://portal.dnb.de/" })
         $results += New-NormalizedResearchResult -Provider 'dnb' -ProviderRecordId "$id" -Title $title -Authors $authors -PublicationYear "$year" -PublicationType 'bibliografischer Nachweis' -Keywords $keywords -Isbn $isbn -Issn $issn -SourceUrl $sourceUrl -Publisher "$publisher"
     }
     return @($results)

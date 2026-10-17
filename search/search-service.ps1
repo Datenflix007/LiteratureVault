@@ -33,6 +33,7 @@ function Get-ResearchProvider {
 
 function Invoke-ResearchHttpGet {
     param([string]$Uri)
+    Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
     $handler = [System.Net.Http.HttpClientHandler]::new()
     $client = [System.Net.Http.HttpClient]::new($handler)
     try {
@@ -78,7 +79,7 @@ function Get-ResearchCacheKey {
         "$($Request.doi)".Trim().ToLowerInvariant(), "$($Request.isbn)".Trim().ToLowerInvariant(),
         "$($Request.issn)".Trim().ToLowerInvariant(), "$($Request.fromYear)", "$($Request.toYear)",
         "$($Request.language)".Trim().ToLowerInvariant(), "$($Request.publicationType)".Trim().ToLowerInvariant(),
-        "$($Request.openAccess)", (@($Request.providers | Sort-Object) -join ",")
+        "$($Request.openAccess)", "$($Request.limit)", (@($Request.providers | Sort-Object) -join ",")
     ) -join "|"
     $sha = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($material))) -replace "-", "").ToLowerInvariant() }
@@ -98,7 +99,7 @@ function New-ResearchRequest {
     $activeIds = @($script:ResearchProviderDefinitions | Where-Object { $_.enabled } | ForEach-Object { $_.id })
     $providerIds = @($providerIds | ForEach-Object { $_.ToLowerInvariant() } | Where-Object { $activeIds -contains $_ } | Select-Object -Unique)
     if (-not $providerIds.Count) { $providerIds = $activeIds }
-    $limit = 20; [void][int]::TryParse("$(Get-BodyValue $Body 'limit' 20)", [ref]$limit)
+    $limit = 50; [void][int]::TryParse("$(Get-BodyValue $Body 'limit' 50)", [ref]$limit)
     $fromYear = 0; [void][int]::TryParse("$(Get-BodyValue $Body 'fromYear')", [ref]$fromYear)
     $toYear = 0; [void][int]::TryParse("$(Get-BodyValue $Body 'toYear')", [ref]$toYear)
     if ($fromYear -lt 1000 -or $fromYear -gt 2999) { $fromYear = 0 }
@@ -110,7 +111,7 @@ function New-ResearchRequest {
         isbn = "$(Get-BodyValue $Body 'isbn')".Trim(); issn = "$(Get-BodyValue $Body 'issn')".Trim(); fromYear = $fromYear; toYear = $toYear
         language = "$(Get-BodyValue $Body 'language')".Trim().ToLowerInvariant(); publicationType = "$(Get-BodyValue $Body 'publicationType')".Trim().ToLowerInvariant()
         subject = "$(Get-BodyValue $Body 'subject')".Trim(); openAccess = "$(Get-BodyValue $Body 'openAccess' '')".Trim().ToLowerInvariant()
-        providers = @($providerIds); limit = [math]::Max(1, [math]::Min(50, $limit)); sort = "$(Get-BodyValue $Body 'sort' 'relevance')".Trim().ToLowerInvariant()
+        providers = @($providerIds); limit = [math]::Max(1, [math]::Min(100, $limit)); sort = "$(Get-BodyValue $Body 'sort' 'relevance')".Trim().ToLowerInvariant()
     }
 }
 

@@ -15,6 +15,46 @@ in Git oder Git LFS.
 - Die UI liest die bibliografischen Einträge aus diesen beiden Zotero-
   Unterordnern. Anhänge, Notizen und Annotationen werden dabei nicht als eigene
   Quellenkarten dargestellt.
+- Die wissenschaftliche Metasuche fragt aktivierte Metadatenquellen direkt ab
+  und führt die Ergebnisse in einer einheitlichen Liste zusammen.
+
+## Wissenschaftliche Metasuche
+
+Auf der Forschungsübersicht steht eine globale Recherche zur Verfügung; jeder
+Projekt-Workspace besitzt zusätzlich eine Recherche mit seinem Forschungsprofil
+als Kontext. Aktiviert sind ausschließlich frei nutzbare Schnittstellen:
+
+- **OpenAlex** für internationale wissenschaftliche Metadaten;
+- **Crossref** für DOI- und Publikationsmetadaten;
+- **Deutsche Nationalbibliothek** über ihre SRU-Schnittstelle für nationale
+  bibliografische Nachweise.
+
+Die Suche normalisiert Treffer, fasst DOI-/ISBN-/Titel-Dubletten zusammen,
+isoliert Providerfehler und hält Antworten höchstens 15 Minuten im externen
+Projektordner vor. Fehlende Abstracts, Volltexte oder Verfügbarkeiten werden
+nicht ergänzt. Ein Projekt-Score ist ein konfigurierbarer, deterministischer
+**Relevanzscore von 0 bis 100** aus direkten Begriffstreffern in Titel,
+Abstract, Schlagwörtern und Kontext. Er ist ausdrücklich keine
+Trefferwahrscheinlichkeit und trifft keine semantischen Aussagen, die nicht in
+den Metadaten stehen.
+
+Die Projektansicht kann Suchanfragen speichern. Sie zeigt je Treffer die
+vollständigen vorhandenen Metadaten und kann ihn als **Literatur** oder
+**Quelle** in Zotero übernehmen. Der lokale Plugin-Import sucht zuerst nach
+einer vorhandenen DOI; bei einem Treffer wird der bestehende Zotero-Eintrag
+wiederverwendet, andernfalls wird ein bibliografischer Eintrag aus den
+verfügbaren Metadaten erzeugt. Anschließend liegt er in der jeweiligen
+Projekt-Untersammlung. Der Import enthält keine geschützten PDF-Dateien.
+
+Die Trefferanzahl ist je Suche auf 25, 50 oder 100 einstellbar. Quellen sind
+direkt in jeder Ergebniszeile mit einer visuellen Kennzeichnung für OpenAlex,
+Crossref oder DNB erkennbar.
+
+ThULB, JSTOR, BASE, DDB, Europeana, K10plus/GVK, ZDB, EZB und DTA erscheinen
+als deutlich gekennzeichnete externe oder konfigurierte Quellen, nicht als
+vorgebliche API-Suche. Insbesondere bleibt JSTOR ohne institutionelle
+Metasearch-Lizenz deaktiviert; ein ThULB-Adapter wird erst nach dokumentierter
+und freigegebener Schnittstelle aktiviert.
 
 ## Voraussetzungen
 
@@ -110,7 +150,7 @@ automatisch um.
 
 ## Plugin für Zotero 10 installieren
 
-Die aktuelle Erweiterung ist Version **0.4.1** und ist für Zotero `10.0.*`
+Die aktuelle Erweiterung ist Version **0.4.2** und ist für Zotero `10.0.*`
 ausgelegt.
 
 1. Paket bauen:
@@ -165,6 +205,7 @@ synchronisierten Speicher.
 | `docker-compose.yml` | Bindet `ZOTERO_STORAGE_PATH` in den WebDAV-Container ein. |
 | `vault-ui.ps1` | Lokaler Server sowie Projekt-, Zotero- und Speicher-API. |
 | `ui/` | Forschungsprojekt-UI. |
+| `search/` | Provider-unabhängiger Suchdienst und getrennte Adapter für OpenAlex, Crossref und DNB. |
 | `zotero-plugin/` | Zotero-Plugin-Quellen. |
 | `build-zotero-plugin.ps1` | Erzeugt `dist/myliteraturevault-zotero.xpi`. |
 | `auto-sync.ps1` | Reiner Speicher-Aktivitätsmonitor, kein Git-Sync. |

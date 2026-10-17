@@ -2,8 +2,10 @@ function ConvertFrom-OpenAlexAbstract {
     param($InvertedIndex)
     if ($null -eq $InvertedIndex) { return "" }
     $words = @{}
-    foreach ($property in $InvertedIndex.PSObject.Properties) {
-        foreach ($position in @($property.Value)) { $words[[int]$position] = $property.Name }
+    $entries = if ($InvertedIndex -is [System.Collections.IDictionary]) { $InvertedIndex.GetEnumerator() } else { $InvertedIndex.PSObject.Properties }
+    foreach ($property in $entries) {
+        $word = if ($property.Key) { "$($property.Key)" } else { "$($property.Name)" }
+        foreach ($position in @($property.Value)) { $words[[int]$position] = $word }
     }
     return (($words.GetEnumerator() | Sort-Object Key | ForEach-Object Value) -join " ")
 }
@@ -12,9 +14,14 @@ function Invoke-OpenAlexResearchProvider {
     param($Request)
     $query = Get-ResearchQueryText $Request
     if ([string]::IsNullOrWhiteSpace($query)) { return @() }
-    $count = [math]::Min([int]$Request.limit, 50)
+    $count = [math]::Min([int]$Request.limit, 100)
     $uri = "https://api.openalex.org/works?search=$([uri]::EscapeDataString($query))&per-page=$count"
-    $payload = Invoke-ResearchHttpGet $uri | ConvertFrom-Json
+    # OpenAlex abstracts may contain case-distinct dictionary keys (for example
+    # “The” and “the”); PowerShell's ConvertFrom-Json rejects those keys.
+    Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
+    $serializer = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+    $serializer.MaxJsonLength = [int]::MaxValue
+    $payload = $serializer.DeserializeObject((Invoke-ResearchHttpGet $uri))
     $results = @()
     foreach ($item in @($payload.results)) {
         $authors = @($item.authorships | ForEach-Object { if ($_.author.display_name) { $_.author.display_name } elseif ($_.raw_author_name) { $_.raw_author_name } } | Where-Object { $_ })

@@ -65,11 +65,76 @@ async function reportProjectCollection(project, libraryID, collection) {
   }
 }
 
+async function reportImportedResearchResult(project, importEntry, item) {
+  const request = await Zotero.HTTP.request("POST", PROJECTS_API_URL + "/" + project.id + "/zotero-imports/" + importEntry.id + "/complete", {
+    body: JSON.stringify({ zoteroKey: item.key }),
+    headers: { "Content-Type": "application/json" },
+    responseType: "json",
+    timeout: 5000
+  });
+  if (request.status < 200 || request.status >= 300) {
+    throw new Error("Die Projekt-UI konnte den Zotero-Import nicht bestätigen.");
+  }
+}
+
+function zoteroItemType(publicationType) {
+  const type = String(publicationType || "").toLowerCase();
+  if (type.includes("journal") || type.includes("article")) return "journalArticle";
+  if (type.includes("book") || type.includes("monograph")) return "book";
+  if (type.includes("thesis") || type.includes("dissertation")) return "thesis";
+  if (type.includes("report")) return "report";
+  return "document";
+}
+
+function creatorFromName(name) {
+  const value = String(name || "").trim();
+  if (!value) return null;
+  const comma = value.indexOf(",");
+  if (comma > 0) return { creatorType: "author", lastName: value.slice(0, comma).trim(), firstName: value.slice(comma + 1).trim() };
+  const parts = value.split(/\s+/);
+  return parts.length > 1
+    ? { creatorType: "author", firstName: parts.slice(0, -1).join(" "), lastName: parts[parts.length - 1] }
+    : { creatorType: "author", name: value, fieldMode: 1 };
+}
+
+async function findExistingResearchItem(libraryID, result) {
+  const doi = String(result.doi || "").replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").trim();
+  if (doi) {
+    const search = new Zotero.Search();
+    search.libraryID = libraryID;
+    search.addCondition("DOI", "is", doi);
+    const ids = await search.search();
+    if (ids.length) return Zotero.Items.get(ids[0]);
+  }
+  return null;
+}
+
+async function importResearchResult(libraryID, result) {
+  const existing = await findExistingResearchItem(libraryID, result);
+  if (existing) return { item: existing, created: false };
+  const item = new Zotero.Item(zoteroItemType(result.publicationType));
+  item.libraryID = libraryID;
+  item.setField("title", String(result.title || "Ohne Titel"));
+  if (result.publicationYear) item.setField("date", String(result.publicationYear));
+  if (result.doi) item.setField("DOI", String(result.doi));
+  if (result.isbn?.length) item.setField("ISBN", result.isbn.join("; "));
+  if (result.issn?.length) item.setField("ISSN", result.issn.join("; "));
+  if (result.language) item.setField("language", String(result.language));
+  if (result.abstract) item.setField("abstractNote", String(result.abstract));
+  if (result.publisher) item.setField("publisher", String(result.publisher));
+  item.setField("url", String(result.sourceUrl || result.fulltextUrl || ""));
+  const creators = (result.authors || []).map(creatorFromName).filter(Boolean);
+  if (creators.length) item.setCreators(creators);
+  await item.saveTx();
+  return { item, created: true };
+}
+
 async function ensureProjectCollections(projects) {
   const libraryID = Zotero.Libraries.userLibraryID;
   let created = 0;
   let linkedItems = 0;
   let missingItems = 0;
+  let importedItems = 0;
 
   for (const project of projects) {
     const projectName = getProjectCollectionName(project, projects);
@@ -118,9 +183,26 @@ async function ensureProjectCollections(projects) {
         linkedItems++;
       }
     }
+
+    for (const importEntry of project.zoteroImportQueue || []) {
+      if (importEntry.status !== "pending" || !importEntry.result) continue;
+      const target = importEntry.kind === "source" ? children.Quellen : children.Literatur;
+      try {
+        const imported = await importResearchResult(libraryID, importEntry.result);
+        const existingItemIDs = new Set(target.getChildItems(true));
+        if (!existingItemIDs.has(imported.item.id)) {
+          await Zotero.DB.executeTransaction(async () => target.addItem(imported.item.id));
+          linkedItems++;
+        }
+        await reportImportedResearchResult(project, importEntry, imported.item);
+        if (imported.created) importedItems++;
+      } catch (error) {
+        log("Research import failed for " + project.name + ": " + error);
+      }
+    }
   }
 
-  return { projects: projects.length, created, linkedItems, missingItems };
+  return { projects: projects.length, created, linkedItems, missingItems, importedItems };
 }
 
 function showSyncResult(window, result) {
@@ -133,7 +215,8 @@ function showSyncResult(window, result) {
   const missingMessage = result.missingItems
     ? "\n" + result.missingItems + " verknüpfte Einträge wurden in Zotero nicht gefunden."
     : "";
-  window.alert("MyLiteratureVault\n\n" + collectionsMessage + itemsMessage + missingMessage);
+  const importsMessage = result.importedItems ? "\n" + result.importedItems + " Recherchetreffer neu in Zotero angelegt." : "";
+  window.alert("MyLiteratureVault\n\n" + collectionsMessage + itemsMessage + importsMessage + missingMessage);
 }
 
 function installMenuItem(window, id, label, callback) {
