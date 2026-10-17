@@ -17,16 +17,12 @@ $stagingDir = Join-Path $DistDir "zotero-plugin-staging"
 Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 
-@("manifest.json", "bootstrap.js", "vault.xhtml", "README.md") | ForEach-Object {
+@("manifest.json", "bootstrap.js", "vault.xhtml") | ForEach-Object {
     Copy-Item -LiteralPath (Join-Path $PluginDir $_) -Destination $stagingDir -Force
 }
-
-$uiSrc = Join-Path $ScriptDir "ui"
-$uiDst = Join-Path $stagingDir "ui"
-New-Item -ItemType Directory -Force -Path $uiDst | Out-Null
-@("index.html", "styles.css", "app.js") | ForEach-Object {
-    Copy-Item -LiteralPath (Join-Path $uiSrc $_) -Destination $uiDst -Force
-}
+# vault.xhtml always opens the running local UI at http://localhost:8765.
+# Packaging a second, unreachable UI copy or the repository README would only
+# make the XPI larger and could let its contents become stale.
 
 Compress-Archive -Path (Join-Path $stagingDir "*") -DestinationPath $ZipPath -Force
 Move-Item $ZipPath $XpiPath -Force

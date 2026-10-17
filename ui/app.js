@@ -789,7 +789,6 @@ document.addEventListener("click", (event) => {
   if (issueButton) return publishIssue(issueButton.dataset.publishIssue).catch((error) => toast(error.message, "error"));
   const row = event.target.closest("[data-open-project-row]");
   if (row && !event.target.closest("button, a, select, input")) return openProject(row.dataset.openProjectRow);
-  if (event.target.closest("#editProjectBrief")) return openProjectDialog();
 });
 
 document.addEventListener("change", (event) => {
