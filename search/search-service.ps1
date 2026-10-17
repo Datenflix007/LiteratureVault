@@ -5,7 +5,7 @@ $script:ResearchProviderDefinitions = @(
     [PSCustomObject]@{ id = "openalex"; name = "OpenAlex"; mode = "api"; enabled = $true; documentationUrl = "https://docs.openalex.org/"; searchUrl = "https://api.openalex.org/works"; message = "Freie Metadaten-API; ohne API-Schlüssel gilt ein gemeinsames Tagesbudget."; capabilities = @("keywords", "title", "author", "doi", "year", "language", "type", "openAccess") },
     [PSCustomObject]@{ id = "crossref"; name = "Crossref"; mode = "api"; enabled = $true; documentationUrl = "https://www.crossref.org/documentation/retrieve-metadata/rest-api/"; searchUrl = "https://api.crossref.org/works"; message = "Freie bibliografische Metadaten-API; Volltexte und Abstracts hängen von den Depositen ab."; capabilities = @("keywords", "title", "author", "doi", "isbn", "issn", "year", "type") },
     [PSCustomObject]@{ id = "dnb"; name = "Deutsche Nationalbibliothek"; mode = "sru"; enabled = $true; documentationUrl = "https://www.dnb.de/sru"; searchUrl = "https://services.dnb.de/sru/dnb"; message = "Offizielle DNB-SRU-Schnittstelle für bibliografische Daten."; capabilities = @("keywords", "title", "author", "isbn", "issn", "year") },
-    [PSCustomObject]@{ id = "thulb"; name = "ThULB Jena"; mode = "external"; enabled = $false; documentationUrl = "https://www.thulb.uni-jena.de/"; searchUrl = "https://kataloge.thulb.uni-jena.de/"; message = "Discovery-/SRU-Zugang wird erst nach dokumentierter Freigabe als Adapter aktiviert."; capabilities = @() },
+    [PSCustomObject]@{ id = "thulb"; name = "ThULB Jena"; mode = "sru"; enabled = $true; documentationUrl = "https://isil.staatsbibliothek-berlin.de/isil/DE-27"; searchUrl = "https://sru.k10plus.de/opac-de-27"; message = "Öffentliche SRU-Suche im ThULB-Katalog (Sigel DE-27); Nachweise und lokale Bestandsinformationen."; capabilities = @("keywords", "title", "author", "isbn", "issn", "year") },
     [PSCustomObject]@{ id = "jstor"; name = "JSTOR"; mode = "institutional"; enabled = $false; documentationUrl = "https://support.jstor.org/hc/en-us/articles/115005075327-JSTOR-XML-Gateway"; searchUrl = "https://www.jstor.org/action/doBasicSearch"; message = "JSTOR XML Gateway verlangt eine institutionelle Metasearch-Lizenz; keine direkte API ohne Zugang."; capabilities = @() },
     [PSCustomObject]@{ id = "base"; name = "BASE"; mode = "external"; enabled = $false; documentationUrl = "https://www.base-search.net/"; searchUrl = "https://www.base-search.net/Search/Results"; message = "Adapter erst aktivieren, wenn ein zulässiger API-Zugang konfiguriert ist."; capabilities = @() },
     [PSCustomObject]@{ id = "ddb"; name = "Deutsche Digitale Bibliothek"; mode = "api-key-required"; enabled = $false; documentationUrl = "https://pro.deutsche-digitale-bibliothek.de/daten-nutzen/api"; searchUrl = "https://www.deutsche-digitale-bibliothek.de/searchresults"; message = "API-Schlüssel erforderlich; bis zur Konfiguration nur externer Zugang."; capabilities = @() },
@@ -79,7 +79,7 @@ function Get-ResearchCacheKey {
         "$($Request.doi)".Trim().ToLowerInvariant(), "$($Request.isbn)".Trim().ToLowerInvariant(),
         "$($Request.issn)".Trim().ToLowerInvariant(), "$($Request.fromYear)", "$($Request.toYear)",
         "$($Request.language)".Trim().ToLowerInvariant(), "$($Request.publicationType)".Trim().ToLowerInvariant(),
-        "$($Request.openAccess)", "$($Request.limit)", (@($Request.providers | Sort-Object) -join ",")
+        "$($Request.openAccess)", "$($Request.limit)", "$($Request.offset)", (@($Request.providers | Sort-Object) -join ",")
     ) -join "|"
     $sha = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($material))) -replace "-", "").ToLowerInvariant() }
@@ -100,10 +100,12 @@ function New-ResearchRequest {
     $providerIds = @($providerIds | ForEach-Object { $_.ToLowerInvariant() } | Where-Object { $activeIds -contains $_ } | Select-Object -Unique)
     if (-not $providerIds.Count) { $providerIds = $activeIds }
     $limit = 50; [void][int]::TryParse("$(Get-BodyValue $Body 'limit' 50)", [ref]$limit)
+    $offset = 0; [void][int]::TryParse("$(Get-BodyValue $Body 'offset' 0)", [ref]$offset)
     $fromYear = 0; [void][int]::TryParse("$(Get-BodyValue $Body 'fromYear')", [ref]$fromYear)
     $toYear = 0; [void][int]::TryParse("$(Get-BodyValue $Body 'toYear')", [ref]$toYear)
     if ($fromYear -lt 1000 -or $fromYear -gt 2999) { $fromYear = 0 }
     if ($toYear -lt 1000 -or $toYear -gt 2999) { $toYear = 0 }
+    if ($offset -lt 0) { $offset = 0 }
     if ($fromYear -and $toYear -and $fromYear -gt $toYear) { $swap = $fromYear; $fromYear = $toYear; $toYear = $swap }
     return [PSCustomObject]@{
         query = "$(Get-BodyValue $Body 'query')".Trim(); title = "$(Get-BodyValue $Body 'title')".Trim(); author = "$(Get-BodyValue $Body 'author')".Trim()
@@ -111,7 +113,7 @@ function New-ResearchRequest {
         isbn = "$(Get-BodyValue $Body 'isbn')".Trim(); issn = "$(Get-BodyValue $Body 'issn')".Trim(); fromYear = $fromYear; toYear = $toYear
         language = "$(Get-BodyValue $Body 'language')".Trim().ToLowerInvariant(); publicationType = "$(Get-BodyValue $Body 'publicationType')".Trim().ToLowerInvariant()
         subject = "$(Get-BodyValue $Body 'subject')".Trim(); openAccess = "$(Get-BodyValue $Body 'openAccess' '')".Trim().ToLowerInvariant()
-        providers = @($providerIds); limit = [math]::Max(1, [math]::Min(100, $limit)); sort = "$(Get-BodyValue $Body 'sort' 'relevance')".Trim().ToLowerInvariant()
+        providers = @($providerIds); limit = [math]::Max(1, [math]::Min(100, $limit)); offset = $offset; sort = "$(Get-BodyValue $Body 'sort' 'relevance')".Trim().ToLowerInvariant()
     }
 }
 
@@ -281,25 +283,27 @@ function Invoke-ResearchSearch {
     $cache = Get-ResearchCache
     $cached = @($cache.entries | Where-Object { $_.key -eq $cacheKey -and $_.expiresAt -gt (Get-Date).ToString("o") } | Select-Object -First 1)
     if ($cached -and -not $SkipCache) {
-        return [PSCustomObject]@{ query = Get-ResearchQueryRepresentation $Request; results = @($cached[0].response.results); providers = @($cached[0].response.providers); errors = @($cached[0].response.errors); cached = $true; retrievedAt = $cached[0].response.retrievedAt; suggestions = if ($Project) { Get-ResearchSuggestions $Project } else { @() } }
+        return [PSCustomObject]@{ query = Get-ResearchQueryRepresentation $Request; results = @($cached[0].response.results); providers = @($cached[0].response.providers); errors = @($cached[0].response.errors); totalAvailable = $cached[0].response.totalAvailable; hasMore = $cached[0].response.hasMore; offset = $Request.offset; cached = $true; retrievedAt = $cached[0].response.retrievedAt; suggestions = if ($Project) { Get-ResearchSuggestions $Project } else { @() } }
     }
     $allResults = @(); $providerStates = @(); $errors = @()
     foreach ($providerId in @($Request.providers)) {
         $provider = Get-ResearchProvider $providerId
         if ($null -eq $provider -or -not $provider.enabled) { continue }
         try {
-            $providerResults = switch ($providerId) {
+            $providerResponse = switch ($providerId) {
                 "openalex" { Invoke-OpenAlexResearchProvider $Request }
                 "crossref" { Invoke-CrossrefResearchProvider $Request }
                 "dnb" { Invoke-DnbResearchProvider $Request }
-                default { @() }
+                "thulb" { Invoke-ThulbResearchProvider $Request }
+                default { [PSCustomObject]@{ results = @(); total = 0 } }
             }
+            $providerResults = @($providerResponse.results)
             $allResults += @($providerResults)
-            $providerStates += [PSCustomObject]@{ id = $providerId; name = $provider.name; status = "ok"; count = @($providerResults).Count; message = "Antwort erhalten."; lastSuccessAt = (Get-Date).ToString("o") }
+            $providerStates += [PSCustomObject]@{ id = $providerId; name = $provider.name; status = "ok"; count = @($providerResults).Count; total = [int]$providerResponse.total; message = "Antwort erhalten."; lastSuccessAt = (Get-Date).ToString("o") }
         } catch {
             $message = "$($_.Exception.Message)"
             $errors += [PSCustomObject]@{ provider = $providerId; message = $message }
-            $providerStates += [PSCustomObject]@{ id = $providerId; name = $provider.name; status = "error"; count = 0; message = $message; lastSuccessAt = "" }
+            $providerStates += [PSCustomObject]@{ id = $providerId; name = $provider.name; status = "error"; count = 0; total = 0; message = $message; lastSuccessAt = "" }
         }
     }
     $results = @(Merge-NormalizedResearchResults $allResults | Where-Object { Test-ResearchResultFilter $_ $Request } | ForEach-Object { Add-ResearchRelevance $_ $Project $Request })
@@ -311,7 +315,9 @@ function Invoke-ResearchSearch {
         "provider" { @($results | Sort-Object provider, title) }
         default { @($results | Sort-Object @{ Expression = { if ($_.relevance) { $_.relevance.score } else { 0 } }; Descending = $true }, title) }
     }
-    $response = [PSCustomObject]@{ query = Get-ResearchQueryRepresentation $Request; results = @($results | Select-Object -First $Request.limit); providers = @($providerStates); errors = @($errors); cached = $false; retrievedAt = (Get-Date).ToString("o"); suggestions = if ($Project) { Get-ResearchSuggestions $Project } else { @() } }
+    $totalAvailable = @($providerStates | Where-Object { $_.status -eq 'ok' } | Measure-Object -Property total -Sum).Sum
+    $hasMore = @($providerStates | Where-Object { $_.status -eq 'ok' -and $_.total -gt ($Request.offset + $_.count) }).Count -gt 0
+    $response = [PSCustomObject]@{ query = Get-ResearchQueryRepresentation $Request; results = @($results | Select-Object -First $Request.limit); providers = @($providerStates); errors = @($errors); totalAvailable = [int]$totalAvailable; hasMore = $hasMore; offset = $Request.offset; cached = $false; retrievedAt = (Get-Date).ToString("o"); suggestions = if ($Project) { Get-ResearchSuggestions $Project } else { @() } }
     $cache.entries = @($cache.entries | Where-Object { $_.key -ne $cacheKey }) + @([PSCustomObject]@{ key = $cacheKey; createdAt = (Get-Date).ToString("o"); expiresAt = (Get-Date).AddMinutes(15).ToString("o"); response = $response })
     Save-ResearchCache $cache
     return $response
@@ -377,3 +383,4 @@ function Remove-ProjectResearchSearch {
 . (Join-Path $PSScriptRoot "providers\openalex.ps1")
 . (Join-Path $PSScriptRoot "providers\crossref.ps1")
 . (Join-Path $PSScriptRoot "providers\dnb.ps1")
+. (Join-Path $PSScriptRoot "providers\thulb.ps1")

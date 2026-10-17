@@ -14,6 +14,11 @@ const state = {
   selectedTaskId: "",
   researchProviders: [],
   researchResults: { global: null, project: null },
+  researchRequests: { global: null, project: null },
+  researchLoadingMore: { global: false, project: false },
+  researchResultFilters: { global: { title: '', author: '', fromYear: '', toYear: '', provider: '', sort: 'relevance' }, project: { title: '', author: '', fromYear: '', toYear: '', provider: '', sort: 'relevance' } },
+  savedResearchResults: [],
+  savedTargetProjectId: localStorage.getItem("myliteraturevault.savedTargetProjectId") || "",
   savedResearchSearches: []
 };
 
@@ -204,7 +209,7 @@ function providerChoices(scope) {
 }
 
 function providerMark(provider) {
-  const marks = { openalex: 'OA', crossref: 'CR', dnb: 'DNB' };
+  const marks = { openalex: 'OA', crossref: 'CR', dnb: 'DNB', thulb: 'ThULB' };
   const key = String(provider || '').toLowerCase();
   return '<span class="provider-mark provider-' + esc(key) + '" title="Quelle: ' + esc(provider) + '">' + esc(marks[key] || provider) + '</span>';
 }
@@ -215,8 +220,53 @@ function researchResultCard(result, scope) {
   const urls = result.fulltextUrl || result.sourceUrl;
   const provider = (result.providers || [result.provider]).join(" · ");
   const details = result.relevance ? '<p class="hint">' + esc(result.relevance.label) + ' · ' + esc((result.relevance.matchedTerms || []).join(", ") || "keine direkten Begriffstreffer") + '<br>' + esc(result.relevance.explanation) + '</p>' : '';
-  const actions = '<div class="research-result-actions"><button type="button" class="secondary-btn" data-research-detail="' + esc(result.resultId) + '">Infos</button>' + (urls ? '<a class="secondary-btn" href="' + esc(urls) + '" target="_blank" rel="noreferrer">Original ↗</a>' : '') + (scope === 'project' ? '<button type="button" class="primary-btn" data-import-zotero="' + esc(result.resultId) + '" data-import-kind="literature">Zu Zotero</button>' : '') + '</div>';
+  const bookmarked = state.savedResearchResults.some((entry) => entry.resultId === result.resultId);
+  const bookmark = '<button type="button" class="bookmark-button' + (bookmarked ? ' saved' : '') + '" data-toggle-saved-research="' + esc(result.resultId) + '" aria-pressed="' + bookmarked + '" title="' + (bookmarked ? 'Aus Merkliste entfernen' : 'In Merkliste speichern') + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 3.75h10.5v16.5L12 17.1l-5.25 3.15z"/></svg><span class="sr-only">' + (bookmarked ? 'Aus Merkliste entfernen' : 'In Merkliste speichern') + '</span></button>';
+  const importAction = scope === 'project'
+    ? '<button type="button" class="primary-btn" data-import-zotero="' + esc(result.resultId) + '" data-import-kind="literature">Zu Zotero</button>'
+    : scope === 'saved' && state.projects.length
+      ? '<button type="button" class="secondary-btn" data-import-saved-zotero="' + esc(result.resultId) + '" data-import-kind="source">Quelle → Zotero</button><button type="button" class="primary-btn" data-import-saved-zotero="' + esc(result.resultId) + '" data-import-kind="literature">Literatur → Zotero</button>'
+      : '';
+  const actions = '<div class="research-result-actions">' + bookmark + '<button type="button" class="secondary-btn" data-research-detail="' + esc(result.resultId) + '">Infos</button>' + (urls ? '<a class="secondary-btn" href="' + esc(urls) + '" target="_blank" rel="noreferrer">Original ↗</a>' : '') + importAction + '</div>';
   return '<article class="research-result">' + providerMark(result.provider) + '<div class="research-result-main"><span class="source-key">' + esc(provider) + '</span>' + relevance + '<h3>' + esc(result.title) + '</h3><p>' + esc([authors, result.publicationYear, result.publicationType].filter(Boolean).join(" · ")) + '</p>' + details + '</div>' + actions + '</article>';
+}
+
+function normalizedResearchText(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('de-DE');
+}
+
+function filteredResearchResults(scope, results) {
+  const filters = state.researchResultFilters[scope];
+  const titleNeedle = normalizedResearchText(filters.title);
+  const authorNeedle = normalizedResearchText(filters.author);
+  const provider = String(filters.provider || '').toLowerCase();
+  const fromYear = Number(filters.fromYear || 0);
+  const toYear = Number(filters.toYear || 0);
+  const visible = (results || []).filter((result) => {
+    const year = Number(result.publicationYear || 0);
+    const providers = (result.providers || [result.provider]).map((entry) => String(entry).toLowerCase());
+    return (!titleNeedle || normalizedResearchText(result.title).includes(titleNeedle))
+      && (!authorNeedle || normalizedResearchText((result.authors || []).join(' ')).includes(authorNeedle))
+      && (!provider || providers.includes(provider))
+      && (!fromYear || (year && year >= fromYear))
+      && (!toYear || (year && year <= toYear));
+  });
+  const compareText = (left, right) => normalizedResearchText(left).localeCompare(normalizedResearchText(right), 'de-DE', { sensitivity: 'base' });
+  return visible.sort((left, right) => {
+    if (filters.sort === 'title') return compareText(left.title, right.title);
+    if (filters.sort === 'author') return compareText((left.authors || []).join(' '), (right.authors || []).join(' ')) || compareText(left.title, right.title);
+    if (filters.sort === 'year-asc') return Number(left.publicationYear || 0) - Number(right.publicationYear || 0) || compareText(left.title, right.title);
+    if (filters.sort === 'year-desc') return Number(right.publicationYear || 0) - Number(left.publicationYear || 0) || compareText(left.title, right.title);
+    if (filters.sort === 'provider') return compareText((left.providers || [left.provider]).join(', '), (right.providers || [right.provider]).join(', ')) || compareText(left.title, right.title);
+    return 0;
+  });
+}
+
+function researchResultFilterControls(scope, results) {
+  const filters = state.researchResultFilters[scope];
+  const providers = [...new Set((results || []).flatMap((result) => result.providers || [result.provider]).filter(Boolean))].sort((left, right) => String(left).localeCompare(String(right), 'de-DE'));
+  const bind = (name) => 'data-research-result-filter="' + scope + '" name="' + name + '"';
+  return '<div class="research-result-filters" aria-label="Trefferliste filtern"><label>Titel<input ' + bind('title') + ' value="' + esc(filters.title) + '" placeholder="Titel filtern …"></label><label>Autor:in<input ' + bind('author') + ' value="' + esc(filters.author) + '" placeholder="Name suchen …"></label><label>Jahr ab<input ' + bind('fromYear') + ' type="number" min="1000" max="2999" value="' + esc(filters.fromYear) + '" placeholder="z. B. 1900"></label><label>bis<input ' + bind('toYear') + ' type="number" min="1000" max="2999" value="' + esc(filters.toYear) + '" placeholder="z. B. 2026"></label><label>Provider<select ' + bind('provider') + '><option value="">Alle Quellen</option>' + providers.map((entry) => '<option value="' + esc(entry) + '"' + (String(filters.provider) === String(entry) ? ' selected' : '') + '>' + esc(entry) + '</option>').join('') + '</select></label><label>Sortieren<select ' + bind('sort') + '><option value="relevance"' + (filters.sort === 'relevance' ? ' selected' : '') + '>Quellenreihenfolge</option><option value="title"' + (filters.sort === 'title' ? ' selected' : '') + '>Titel A–Z</option><option value="author"' + (filters.sort === 'author' ? ' selected' : '') + '>Autor:in A–Z</option><option value="year-desc"' + (filters.sort === 'year-desc' ? ' selected' : '') + '>Jahr absteigend</option><option value="year-asc"' + (filters.sort === 'year-asc' ? ' selected' : '') + '>Jahr aufsteigend</option><option value="provider"' + (filters.sort === 'provider' ? ' selected' : '') + '>Provider A–Z</option></select></label><button type="button" class="quiet-btn" data-clear-research-result-filters="' + scope + '">Filter zurücksetzen</button></div>';
 }
 
 function renderResearch(scope, response) {
@@ -224,21 +274,79 @@ function renderResearch(scope, response) {
   const target = document.querySelector('[data-research-results="' + scope + '"]');
   if (!status || !target) return;
   if (!response) { status.textContent = "Noch keine Suche ausgeführt."; target.innerHTML = ""; return; }
-  const providers = (response.providers || []).map((provider) => provider.name + ': ' + provider.count + (provider.status === 'error' ? ' (Fehler)' : '')).join(' · ');
-  status.textContent = (response.cached ? 'Zwischengespeicherte' : 'Live-') + 'Ergebnisse: ' + (response.results || []).length + ' Treffer. ' + providers;
+  const total = Number(response.totalAvailable || 0);
+  const loaded = (response.results || []).length;
+  const visibleResults = filteredResearchResults(scope, response.results || []);
+  const providers = (response.providers || []).map((provider) => {
+    if (provider.status === 'error') return provider.name + ': Fehler';
+    return provider.name + ': ' + provider.count + ' geladen / ' + Number(provider.total || 0).toLocaleString('de-DE');
+  }).join(' · ');
+  const totalText = total ? total.toLocaleString('de-DE') + ' Roh-Treffer in aktivierten Datenbanken' : loaded + ' Treffer';
+  status.textContent = (response.cached ? 'Zwischengespeicherte' : 'Live-') + 'Ergebnisse: ' + visibleResults.length + ' von ' + loaded + ' angezeigt · ' + totalText + '. ' + providers;
   const errors = (response.errors || []).map((error) => '<p class="hint error-copy">' + esc(error.provider + ': ' + error.message) + '</p>').join("");
-  target.innerHTML = errors + ((response.results || []).length ? response.results.map((result) => researchResultCard(result, scope)).join("") : '<p class="empty-mini">Keine Treffer mit den gewählten Filtern.</p>');
+  const more = response.hasMore
+    ? '<div class="research-more"><p class="hint">Die Datenbanken melden weitere Treffer. Die Liste wird seitenweise erweitert.</p><button type="button" class="secondary-btn" data-load-more-research="' + esc(scope) + '"' + (state.researchLoadingMore[scope] ? ' disabled' : '') + '>' + (state.researchLoadingMore[scope] ? 'Weitere Treffer werden geladen …' : 'Weitere Treffer laden') + '</button></div>'
+    : '<p class="hint research-end">Alle von den aktivierten Datenbanken erreichbaren Trefferseiten wurden geladen.</p>';
+  target.innerHTML = researchResultFilterControls(scope, response.results || []) + errors + (visibleResults.length ? visibleResults.map((result) => researchResultCard(result, scope)).join("") : '<p class="empty-mini">Keine Treffer mit den gewählten Filtern.</p>') + more;
 }
 
 function researchResultById(resultId) {
-  return Object.values(state.researchResults).flatMap((response) => response?.results || []).find((result) => result.resultId === resultId) || null;
+  return Object.values(state.researchResults).flatMap((response) => response?.results || []).concat(state.savedResearchResults).find((result) => result.resultId === resultId) || null;
+}
+
+function renderSavedResearchResults() {
+  const target = $('savedResearchPanel');
+  if (!target) return;
+  const projects = state.projects || [];
+  if (!projects.some((project) => project.id === state.savedTargetProjectId)) state.savedTargetProjectId = projects[0]?.id || '';
+  const options = projects.length
+    ? projects.map((project) => '<option value="' + esc(project.id) + '"' + (project.id === state.savedTargetProjectId ? ' selected' : '') + '>' + esc(project.name) + '</option>').join('')
+    : '<option value="">Zuerst ein Projekt anlegen</option>';
+  const results = state.savedResearchResults || [];
+  target.innerHTML = '<section class="saved-research-panel panel-card"><header><div><p class="eyebrow">MERKLISTE</p><h2>Für später gespeichert</h2><p class="hint">Die Metadaten und Original- bzw. Volltext-URLs bleiben lokal im synchronisierten Projektordner. Wähle ein Projekt für den Zotero-Import.</p></div><span class="saved-result-count">' + results.length + '</span></header><div class="saved-research-toolbar"><label>Projekt für Import<select data-saved-project-select' + (projects.length ? '' : ' disabled') + '>' + options + '</select></label></div><div class="research-results">' + (results.length ? results.map((result) => researchResultCard(result, 'saved')).join('') : '<p class="empty-mini">Noch keine Treffer gemerkt. Nutze das Lesezeichen an einem Recherchetreffer.</p>') + '</div></section>';
+}
+
+async function loadSavedResearchResults() {
+  state.savedResearchResults = await api('/api/research/saved');
+  renderSavedResearchResults();
+}
+
+function renderResearchBookmarks() {
+  Object.entries(state.researchResults).forEach(([scope, response]) => { if (response) renderResearch(scope, response); });
+  renderSavedResearchResults();
+}
+
+async function toggleSavedResearchResult(resultId) {
+  const existing = state.savedResearchResults.find((result) => result.resultId === resultId);
+  if (existing) {
+    await api('/api/research/saved/' + encodeURIComponent(resultId), { method: 'DELETE' });
+    state.savedResearchResults = state.savedResearchResults.filter((result) => result.resultId !== resultId);
+    toast('Treffer aus der Merkliste entfernt.');
+  } else {
+    const result = researchResultById(resultId);
+    if (!result) throw new Error('Der Recherchetreffer ist nicht mehr verfügbar.');
+    const saved = await api('/api/research/saved', { method: 'POST', body: JSON.stringify({ result }) });
+    state.savedResearchResults = [saved, ...state.savedResearchResults.filter((entry) => entry.resultId !== saved.resultId)];
+    toast('Treffer in der Merkliste gespeichert.');
+  }
+  renderResearchBookmarks();
+}
+
+async function importSavedResearchResultToZotero(resultId, kind) {
+  const project = state.projects.find((entry) => entry.id === state.savedTargetProjectId);
+  const result = state.savedResearchResults.find((entry) => entry.resultId === resultId);
+  if (!project) throw new Error('Bitte wähle ein Projekt für den Zotero-Import.');
+  if (!result) throw new Error('Der gemerkte Treffer wurde nicht gefunden.');
+  const queued = await api('/api/projects/' + project.id + '/research/import-zotero', { method: 'POST', body: JSON.stringify({ kind, result }) });
+  await api('/api/projects/' + project.id + '/zotero-collection/request', { method: 'POST', body: '{}' });
+  toast(queued.status === 'completed' ? 'Dieser Treffer ist bereits in Zotero verknüpft.' : 'Import an „' + project.name + '“ übergeben: ' + (kind === 'source' ? 'Quellen' : 'Literatur') + '.');
 }
 
 function openResearchDetail(resultId) {
   const result = researchResultById(resultId);
   if (!result) return;
   const meta = [
-    ['Autor:innen', (result.authors || []).join('; ')], ['Erscheinungsjahr', result.publicationYear], ['Typ', result.publicationType], ['Quelle', (result.providers || [result.provider]).join(', ')], ['DOI', result.doi], ['ISBN', (result.isbn || []).join(', ')], ['ISSN', (result.issn || []).join(', ')], ['Sprache', result.language], ['Verlag / Journal', result.publisher], ['Open Access', result.openAccessStatus]
+    ['Autor:innen', (result.authors || []).join('; ')], ['Erscheinungsjahr', result.publicationYear], ['Typ', result.publicationType], ['Quelle', (result.providers || [result.provider]).join(', ')], ['DOI', result.doi], ['ISBN', (result.isbn || []).join(', ')], ['ISSN', (result.issn || []).join(', ')], ['Sprache', result.language], ['Verlag / Journal', result.publisher], ['Bestand / Verfügbarkeit', result.availability], ['Open Access', result.openAccessStatus]
   ].filter(([, value]) => value);
   $('researchDetailTitle').textContent = result.title;
   $('researchDetailBody').innerHTML = '<dl class="metadata-list">' + meta.map(([label, value]) => '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>').join('') + '</dl>' + (result.abstract ? '<section><h3>Abstract</h3><p>' + nl(result.abstract) + '</p></section>' : '') + (result.keywords?.length ? '<section><h3>Schlagwörter</h3><p>' + esc(result.keywords.join(', ')) + '</p></section>' : '');
@@ -271,7 +379,7 @@ async function loadResearchProviders() {
 function requestFromForm(form) {
   const formData = new FormData(form);
   const value = (name) => String(formData.get(name) || '').trim();
-  return { query: value('query'), title: value('title'), author: value('author'), keywords: value('keywords'), doi: value('doi'), isbn: value('isbn'), issn: value('issn'), language: value('language'), fromYear: value('fromYear'), toYear: value('toYear'), limit: value('limit') || '50', sort: value('sort') || 'relevance', providers: formData.getAll('providers') };
+  return { query: value('query'), title: value('title'), author: value('author'), keywords: value('keywords'), doi: value('doi'), isbn: value('isbn'), issn: value('issn'), language: value('language'), fromYear: value('fromYear'), toYear: value('toYear'), limit: value('limit') || '50', offset: 0, sort: value('sort') || 'relevance', providers: formData.getAll('providers') };
 }
 
 async function runResearch(form) {
@@ -282,7 +390,42 @@ async function runResearch(form) {
   const path = project ? '/api/projects/' + project.id + '/research/search' : '/api/research/search';
   const response = await api(path, { method: 'POST', body: JSON.stringify(request) });
   state.researchResults[scope] = response;
+  state.researchRequests[scope] = request;
   renderResearch(scope, response);
+}
+
+async function loadMoreResearch(scope) {
+  const current = state.researchResults[scope];
+  const previousRequest = state.researchRequests[scope];
+  if (!current || !previousRequest || !current.hasMore || state.researchLoadingMore[scope]) return;
+  const project = scope === 'project' ? projectById() : null;
+  const path = project ? '/api/projects/' + project.id + '/research/search' : '/api/research/search';
+  const nextRequest = { ...previousRequest, offset: Number(previousRequest.offset || 0) + Number(previousRequest.limit || 50) };
+  state.researchLoadingMore[scope] = true;
+  renderResearch(scope, current);
+  try {
+    const nextPage = await api(path, { method: 'POST', body: JSON.stringify(nextRequest) });
+    const uniqueResults = new Map();
+    [...(current.results || []), ...(nextPage.results || [])].forEach((result) => uniqueResults.set(result.resultId, result));
+    state.researchResults[scope] = { ...nextPage, results: [...uniqueResults.values()] };
+    state.researchRequests[scope] = nextRequest;
+  } finally {
+    state.researchLoadingMore[scope] = false;
+    renderResearch(scope, state.researchResults[scope]);
+  }
+}
+
+function updateResearchResultFilter(control) {
+  const scope = control.dataset.researchResultFilter;
+  if (!scope || !state.researchResultFilters[scope] || !control.name) return;
+  state.researchResultFilters[scope][control.name] = control.value;
+  const cursor = typeof control.selectionStart === 'number' ? control.selectionStart : null;
+  renderResearch(scope, state.researchResults[scope]);
+  const replacement = document.querySelector('[data-research-result-filter="' + scope + '"][name="' + control.name + '"]');
+  if (replacement) {
+    replacement.focus();
+    if (cursor !== null && typeof replacement.setSelectionRange === 'function') replacement.setSelectionRange(cursor, cursor);
+  }
 }
 
 function workspaceTaskCard(task, references) {
@@ -379,6 +522,7 @@ async function loadProjects() {
   if (!state.selectedProjectId && state.projects.length) setSelectedProject(state.projects[0].id);
   renderProjects();
   renderWorkspace();
+  renderSavedResearchResults();
 }
 
 async function loadTrash() {
@@ -879,6 +1023,18 @@ document.addEventListener("click", (event) => {
   if (sourceResult) return selectZoteroResult(sourceResult.dataset.zoteroResult);
   const detailButton = event.target.closest('[data-research-detail]');
   if (detailButton) return openResearchDetail(detailButton.dataset.researchDetail);
+  const clearResearchFilters = event.target.closest('[data-clear-research-result-filters]');
+  if (clearResearchFilters) {
+    const scope = clearResearchFilters.dataset.clearResearchResultFilters;
+    state.researchResultFilters[scope] = { title: '', author: '', fromYear: '', toYear: '', provider: '', sort: 'relevance' };
+    return renderResearch(scope, state.researchResults[scope]);
+  }
+  const bookmarkButton = event.target.closest('[data-toggle-saved-research]');
+  if (bookmarkButton) return toggleSavedResearchResult(bookmarkButton.dataset.toggleSavedResearch).catch((error) => toast(error.message, 'error'));
+  const loadMoreButton = event.target.closest('[data-load-more-research]');
+  if (loadMoreButton) return loadMoreResearch(loadMoreButton.dataset.loadMoreResearch).catch((error) => toast(error.message, 'error'));
+  const savedImportButton = event.target.closest('[data-import-saved-zotero]');
+  if (savedImportButton) return importSavedResearchResultToZotero(savedImportButton.dataset.importSavedZotero, savedImportButton.dataset.importKind).catch((error) => toast(error.message, 'error'));
   const importButton = event.target.closest('[data-import-zotero]');
   if (importButton) return importResearchResultToZotero(importButton.dataset.importZotero, importButton.dataset.importKind).catch((error) => toast(error.message, 'error'));
   const removeButton = event.target.closest("[data-remove-reference]");
@@ -903,6 +1059,14 @@ document.addEventListener('submit', (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  const researchResultFilter = event.target.closest('[data-research-result-filter]');
+  if (researchResultFilter) return updateResearchResultFilter(researchResultFilter);
+  const savedProjectSelect = event.target.closest('[data-saved-project-select]');
+  if (savedProjectSelect) {
+    state.savedTargetProjectId = savedProjectSelect.value;
+    localStorage.setItem('myliteraturevault.savedTargetProjectId', state.savedTargetProjectId);
+    return;
+  }
   const statusControl = event.target.closest("[data-task-status]");
   if (statusControl) setTaskStatus(statusControl.dataset.taskStatus, statusControl.value).catch((error) => toast(error.message, "error"));
   const checklistControl = event.target.closest("[data-checklist-item]");
@@ -910,6 +1074,8 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  const researchResultFilter = event.target.closest('[data-research-result-filter]');
+  if (researchResultFilter) return updateResearchResultFilter(researchResultFilter);
   const conceptField = event.target.closest("[data-concept-field]");
   if (!conceptField) return;
   window.clearTimeout(state.conceptTimer);
@@ -982,4 +1148,4 @@ window.setInterval(() => {
   if (saved) setWidth(saved);
 })();
 
-Promise.all([loadStatus(), loadProjects(), loadResearchProviders()]).catch((error) => toast(error.message, "error"));
+Promise.all([loadStatus(), loadProjects(), loadResearchProviders(), loadSavedResearchResults()]).catch((error) => toast(error.message, "error"));

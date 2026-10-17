@@ -2,7 +2,7 @@
 
 Das Plugin verbindet die lokale MyLiteratureVault-UI mit Zotero und legt für
 jedes Projekt echte Sammlungen in **Meine Bibliothek** an. Aktuelle Version:
-**0.4.1**. Sie ist für **Zotero 10.0.\*** freigegeben.
+**0.4.3**. Sie ist für **Zotero 10.0.\*** freigegeben.
 
 ## Voraussetzungen
 

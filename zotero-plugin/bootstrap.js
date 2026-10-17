@@ -122,7 +122,12 @@ async function importResearchResult(libraryID, result) {
   if (result.language) item.setField("language", String(result.language));
   if (result.abstract) item.setField("abstractNote", String(result.abstract));
   if (result.publisher) item.setField("publisher", String(result.publisher));
-  item.setField("url", String(result.sourceUrl || result.fulltextUrl || ""));
+  const sourceUrl = String(result.sourceUrl || "").trim();
+  const fulltextUrl = String(result.fulltextUrl || "").trim();
+  item.setField("url", sourceUrl || fulltextUrl);
+  if (sourceUrl && fulltextUrl && sourceUrl !== fulltextUrl) {
+    item.setField("extra", "Volltext-URL: " + fulltextUrl);
+  }
   const creators = (result.authors || []).map(creatorFromName).filter(Boolean);
   if (creators.length) item.setCreators(creators);
   await item.saveTx();

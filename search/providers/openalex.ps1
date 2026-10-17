@@ -13,15 +13,17 @@ function ConvertFrom-OpenAlexAbstract {
 function Invoke-OpenAlexResearchProvider {
     param($Request)
     $query = Get-ResearchQueryText $Request
-    if ([string]::IsNullOrWhiteSpace($query)) { return @() }
+    if ([string]::IsNullOrWhiteSpace($query)) { return [PSCustomObject]@{ results = @(); total = 0 } }
     $count = [math]::Min([int]$Request.limit, 100)
-    $uri = "https://api.openalex.org/works?search=$([uri]::EscapeDataString($query))&per-page=$count"
+    $page = [math]::Floor([int]$Request.offset / $count) + 1
+    $uri = "https://api.openalex.org/works?search=$([uri]::EscapeDataString($query))&per-page=$count&page=$page"
     # OpenAlex abstracts may contain case-distinct dictionary keys (for example
     # “The” and “the”); PowerShell's ConvertFrom-Json rejects those keys.
     Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
     $serializer = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
     $serializer.MaxJsonLength = [int]::MaxValue
     $payload = $serializer.DeserializeObject((Invoke-ResearchHttpGet $uri))
+    $total = 0; [void][int]::TryParse("$($payload.meta.count)", [ref]$total)
     $results = @()
     foreach ($item in @($payload.results)) {
         $authors = @($item.authorships | ForEach-Object { if ($_.author.display_name) { $_.author.display_name } elseif ($_.raw_author_name) { $_.raw_author_name } } | Where-Object { $_ })
@@ -32,5 +34,5 @@ function Invoke-OpenAlexResearchProvider {
         $oa = if ($item.open_access.is_oa) { "open" } elseif ($item.open_access.oa_status) { "$($item.open_access.oa_status)" } else { "unknown" }
         $results += New-NormalizedResearchResult -Provider "openalex" -ProviderRecordId "$($item.id)" -Title "$($item.title)" -Authors $authors -PublicationYear "$($item.publication_year)" -PublicationType "$($item.type)" -Abstract (ConvertFrom-OpenAlexAbstract $item.abstract_inverted_index) -Keywords $keywords -Language "$($item.language)" -Doi "$($item.doi)" -Isbn @() -Issn @() -SourceUrl $sourceUrl -FulltextUrl $fulltext -OpenAccessStatus $oa -Publisher "$($location.source.display_name)"
     }
-    return @($results)
+    return [PSCustomObject]@{ results = @($results); total = $total }
 }

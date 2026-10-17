@@ -28,13 +28,17 @@ function Get-DnbMarcValues {
 function Invoke-DnbResearchProvider {
     param($Request)
     $cql = ConvertTo-DnbCql $Request
-    if (-not $cql) { return @() }
+    if (-not $cql) { return [PSCustomObject]@{ results = @(); total = 0 } }
     $count = [math]::Min([int]$Request.limit, 100)
-    $uri = "https://services.dnb.de/sru/dnb?version=1.1&operation=searchRetrieve&recordSchema=MARC21-xml&maximumRecords=$count&query=$([uri]::EscapeDataString($cql))"
+    $startRecord = [int]$Request.offset + 1
+    $uri = "https://services.dnb.de/sru/dnb?version=1.1&operation=searchRetrieve&recordSchema=MARC21-xml&maximumRecords=$count&startRecord=$startRecord&query=$([uri]::EscapeDataString($cql))"
     [xml]$xml = Invoke-ResearchHttpGet $uri
     $manager = [System.Xml.XmlNamespaceManager]::new($xml.NameTable)
     $manager.AddNamespace('srw', 'http://www.loc.gov/zing/srw/')
     $manager.AddNamespace('marc', 'http://www.loc.gov/MARC21/slim')
+    $total = 0
+    $totalNode = $xml.SelectSingleNode('//srw:numberOfRecords', $manager)
+    if ($totalNode) { [void][int]::TryParse("$($totalNode.InnerText)", [ref]$total) }
     $results = @()
     foreach ($record in @($xml.SelectNodes('//srw:recordData/marc:record', $manager))) {
         $id = @($record.SelectNodes('./marc:controlfield[@tag="001"]', $manager) | ForEach-Object { $_.'#text' })[0]
@@ -48,5 +52,5 @@ function Invoke-DnbResearchProvider {
         $sourceUrl = $(if ($id) { "https://portal.dnb.de/opac.htm?method=showFullRecord&currentResultId=$id%26any&currentPosition=1" } else { "https://portal.dnb.de/" })
         $results += New-NormalizedResearchResult -Provider 'dnb' -ProviderRecordId "$id" -Title $title -Authors $authors -PublicationYear "$year" -PublicationType 'bibliografischer Nachweis' -Keywords $keywords -Isbn $isbn -Issn $issn -SourceUrl $sourceUrl -Publisher "$publisher"
     }
-    return @($results)
+    return [PSCustomObject]@{ results = @($results); total = $total }
 }

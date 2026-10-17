@@ -270,6 +270,70 @@ function Ensure-ProjectModel {
     $Project.references = @($normalizedReferences)
 }
 
+function Get-SavedResearchResultsPath {
+    return Join-Path (Join-Path (Ensure-StorageRoot) 'Projekte') '.myliteraturevault-saved-results.json'
+}
+
+function Get-SavedResearchResults {
+    $path = Get-SavedResearchResultsPath
+    if (-not (Test-Path -LiteralPath $path)) { return @() }
+    try {
+        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        $parsed = $raw | ConvertFrom-Json
+        return @($parsed | Where-Object { $null -ne $_ -and "$(Get-BodyValue $_ 'resultId')".Trim() })
+    } catch {
+        throw "Die Merkliste konnte nicht gelesen werden: $($_.Exception.Message)"
+    }
+}
+
+function Save-SavedResearchResults {
+    param([object[]]$Results)
+    $json = if (@($Results).Count) { ConvertTo-Json -InputObject $Results -Depth 20 } else { '[]' }
+    Set-Content -LiteralPath (Get-SavedResearchResultsPath) -Value $json -Encoding UTF8
+}
+
+function ConvertTo-SavedResearchResult {
+    param($Result)
+    $title = "$(Get-BodyValue $Result 'title')".Trim()
+    if ([string]::IsNullOrWhiteSpace($title) -or $title -eq 'Ohne Titel') { throw 'Ein gemerkter Treffer benötigt einen Titel.' }
+    $resultId = "$(Get-BodyValue $Result 'resultId')".Trim().ToLowerInvariant()
+    if ($resultId -notmatch '^[a-f0-9]{40}$') {
+        $hash = [Security.Cryptography.SHA1]::Create()
+        try { $resultId = ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes("$title|$(Get-BodyValue $Result 'doi')|$(Get-BodyValue $Result 'publicationYear')"))) -replace '-', '').ToLowerInvariant() }
+        finally { $hash.Dispose() }
+    }
+    return [PSCustomObject]@{
+        resultId = $resultId; provider = "$(Get-BodyValue $Result 'provider')".Trim(); providers = @(Get-BodyValue $Result 'providers' @())
+        title = $title; authors = @(Get-BodyValue $Result 'authors' @()); publicationYear = "$(Get-BodyValue $Result 'publicationYear')".Trim(); publicationType = "$(Get-BodyValue $Result 'publicationType')".Trim()
+        abstract = "$(Get-BodyValue $Result 'abstract')".Trim(); keywords = @(Get-BodyValue $Result 'keywords' @()); language = "$(Get-BodyValue $Result 'language')".Trim(); doi = "$(Get-BodyValue $Result 'doi')".Trim()
+        isbn = @(Get-BodyValue $Result 'isbn' @()); issn = @(Get-BodyValue $Result 'issn' @()); sourceUrl = "$(Get-BodyValue $Result 'sourceUrl')".Trim(); fulltextUrl = "$(Get-BodyValue $Result 'fulltextUrl')".Trim()
+        publisher = "$(Get-BodyValue $Result 'publisher')".Trim(); availability = "$(Get-BodyValue $Result 'availability')".Trim(); savedAt = (Get-Date).ToString('o')
+    }
+}
+
+function Add-SavedResearchResult {
+    param($Body)
+    $saved = ConvertTo-SavedResearchResult (Get-BodyValue $Body 'result' $Body)
+    $results = @(Get-SavedResearchResults)
+    $existing = @($results | Where-Object { $_.resultId -eq $saved.resultId } | Select-Object -First 1)
+    if ($existing) { return $existing[0] }
+    $allResults = [System.Collections.Generic.List[object]]::new()
+    [void]$allResults.Add($saved)
+    foreach ($result in $results) { [void]$allResults.Add($result) }
+    Save-SavedResearchResults -Results $allResults.ToArray()
+    return $saved
+}
+
+function Remove-SavedResearchResult {
+    param([string]$ResultId)
+    $results = @(Get-SavedResearchResults)
+    $remaining = @($results | Where-Object { $_.resultId -ne $ResultId })
+    if ($remaining.Count -eq $results.Count) { throw 'Der gemerkte Treffer wurde nicht gefunden.' }
+    Save-SavedResearchResults -Results $remaining
+    return @{ ok = $true }
+}
+
 function Get-ProjectSummary {
     param($Project)
     Ensure-ProjectModel $Project
@@ -1118,6 +1182,18 @@ function Handle-Api {
             Send-Json $Context @(Get-ResearchProviderCatalog)
             return
         }
+        if ($Path -eq "/api/research/saved" -and $method -eq "GET") {
+            Send-Json $Context @(Get-SavedResearchResults)
+            return
+        }
+        if ($Path -eq "/api/research/saved" -and $method -eq "POST") {
+            Send-Json $Context (Add-SavedResearchResult (Read-JsonBody $Context.Request)) 201
+            return
+        }
+        if ($Path -match '^/api/research/saved/([a-f0-9]{40})$' -and $method -eq "DELETE") {
+            Send-Json $Context (Remove-SavedResearchResult $matches[1])
+            return
+        }
         if ($Path -eq "/api/research/search" -and $method -eq "POST") {
             $request = New-ResearchRequest (Read-JsonBody $Context.Request)
             if (-not (Get-ResearchQueryText $request)) { throw "Bitte mindestens einen Suchbegriff, DOI, ISBN oder eine ISSN eingeben." }
@@ -1285,11 +1361,12 @@ function Handle-Api {
 function Serve-File {
     param($Context, [string]$Path)
     if ($Path -eq "/") { $Path = "/index.html" }
+    if ($Path -eq "/favicon.ico") { $Path = "/favicon.svg" }
     $relative = $Path.TrimStart("/") -replace "/", [IO.Path]::DirectorySeparatorChar
     $file = Join-Path $UiDir $relative
     if (-not (Test-Path $file)) { Send-Response $Context 404 "Not found" "text/plain"; return }
     $ext = [IO.Path]::GetExtension($file).ToLowerInvariant()
-    $type = switch ($ext) { ".html" { "text/html" } ".css" { "text/css" } ".js" { "application/javascript" } default { "text/plain" } }
+    $type = switch ($ext) { ".html" { "text/html" } ".css" { "text/css" } ".js" { "application/javascript" } ".svg" { "image/svg+xml" } default { "text/plain" } }
     Send-Response $Context 200 (Get-Content -Raw -Encoding UTF8 $file) $type
 }
 

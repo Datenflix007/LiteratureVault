@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MyLiteratureVault · Forschungs-Workspace</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -52,6 +53,7 @@
         <form data-research-form="global" class="research-form"><div class="research-query-row"><input name="query" required placeholder="Wissenschaftliche Literatur und Quellen durchsuchen …"><label class="result-limit">Treffer<select name="limit"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label><button class="primary-btn" type="submit">Suchen</button></div><div class="research-provider-list" data-research-providers="global"></div><details><summary>Erweiterte Suche und Filter</summary><div class="form-three"><label>Titel<input name="title"></label><label>Autor:in<input name="author"></label><label>Schlagwörter<input name="keywords"></label><label>DOI<input name="doi"></label><label>ISBN / ISSN<input name="isbn"></label><label>Sprache<input name="language" placeholder="de, en …"></label><label>Von Jahr<input name="fromYear" type="number" min="1000" max="2999"></label><label>Bis Jahr<input name="toYear" type="number" min="1000" max="2999"></label><label>Sortierung<select name="sort"><option value="relevance">Relevanz</option><option value="year-desc">Jahr absteigend</option><option value="year-asc">Jahr aufsteigend</option><option value="title">Titel</option><option value="author">Autor:in</option></select></label></div></details></form>
         <div class="research-status" data-research-status="global">Noch keine Suche ausgeführt.</div><div class="research-results" data-research-results="global"></div>
       </section>
+      <div id="savedResearchPanel"></div>
       <div class="section-heading">
         <div><p class="eyebrow">PROJEKTE</p><h2>Aktive Forschungsprojekte</h2><p>Projektdaten bleiben im lokalen, synchronisierten Arbeitsordner. Zotero-Titel werden nur verknüpft.</p></div>
         <button id="newProjectBtn" type="button" class="primary-btn">Neues Projekt</button>

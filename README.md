@@ -1,159 +1,71 @@
 # MyLiteratureVault
 
-MyLiteratureVault verbindet einen lokalen WebDAV-Speicher für Zotero mit einer
-lokalen Forschungsprojekt-UI. Zotero-Anhänge, Projektordner und private
-Forschungsdaten bleiben in einem lokal synchronisierten Cloud-Ordner – niemals
-in Git oder Git LFS.
+MyLiteratureVault verbindet Ihre Forschungsprojekte, Zotero und einen lokalen
+WebDAV-Speicher. Literatur, Quellen, Aufgaben und Projektordner bleiben dabei
+auf Ihrem Rechner bzw. in Ihrem bereits synchronisierten Cloud-Ordner – nicht
+in GitHub und nicht in Git LFS.
 
-## Was das Projekt übernimmt
+> Die folgenden Bilder sind anonymisierte Beispielansichten der Anwendung. Sie
+> enthalten keine lokalen Pfade, Projekte oder Forschungsdaten.
 
-- Docker stellt einen lokalen WebDAV-Endpunkt für Zotero bereit.
-- Die UI verwaltet Forschungsprojekte, Aufgaben, Projektmetadaten und lokale
-  Projektordner.
-- Das Zotero-Plugin legt für jedes UI-Projekt eine Sammlung unter **Meine
-  Bibliothek** an und ergänzt die Unterordner **Literatur** und **Quellen**.
-- Die UI liest die bibliografischen Einträge aus diesen beiden Zotero-
-  Unterordnern. Anhänge, Notizen und Annotationen werden dabei nicht als eigene
-  Quellenkarten dargestellt.
-- Die wissenschaftliche Metasuche fragt aktivierte Metadatenquellen direkt ab
-  und führt die Ergebnisse in einer einheitlichen Liste zusammen.
+![Beispielansicht der Metasuche](docs/screenshots/01-recherche.svg)
 
-## Wissenschaftliche Metasuche
+## In drei Sätzen
 
-Auf der Forschungsübersicht steht eine globale Recherche zur Verfügung; jeder
-Projekt-Workspace besitzt zusätzlich eine Recherche mit seinem Forschungsprofil
-als Kontext. Aktiviert sind ausschließlich frei nutzbare Schnittstellen:
+1. Sie legen ein Forschungsprojekt in der Oberfläche an.
+2. Das Zotero-Plugin erzeugt dazu unter **Meine Bibliothek** eine Sammlung mit
+   **Literatur** und **Quellen**.
+3. Sie recherchieren Metadaten, merken Treffer vor und importieren sie als
+   Literatur oder Quelle in das gewählte Projekt.
 
-- **OpenAlex** für internationale wissenschaftliche Metadaten;
-- **Crossref** für DOI- und Publikationsmetadaten;
-- **Deutsche Nationalbibliothek** über ihre SRU-Schnittstelle für nationale
-  bibliografische Nachweise.
+## Schnellstart für Windows
 
-Die Suche normalisiert Treffer, fasst DOI-/ISBN-/Titel-Dubletten zusammen,
-isoliert Providerfehler und hält Antworten höchstens 15 Minuten im externen
-Projektordner vor. Fehlende Abstracts, Volltexte oder Verfügbarkeiten werden
-nicht ergänzt. Ein Projekt-Score ist ein konfigurierbarer, deterministischer
-**Relevanzscore von 0 bis 100** aus direkten Begriffstreffern in Titel,
-Abstract, Schlagwörtern und Kontext. Er ist ausdrücklich keine
-Trefferwahrscheinlichkeit und trifft keine semantischen Aussagen, die nicht in
-den Metadaten stehen.
+### Was Sie vorher brauchen
 
-Die Projektansicht kann Suchanfragen speichern. Sie zeigt je Treffer die
-vollständigen vorhandenen Metadaten und kann ihn als **Literatur** oder
-**Quelle** in Zotero übernehmen. Der lokale Plugin-Import sucht zuerst nach
-einer vorhandenen DOI; bei einem Treffer wird der bestehende Zotero-Eintrag
-wiederverwendet, andernfalls wird ein bibliografischer Eintrag aus den
-verfügbaren Metadaten erzeugt. Anschließend liegt er in der jeweiligen
-Projekt-Untersammlung. Der Import enthält keine geschützten PDF-Dateien.
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [Zotero 10](https://www.zotero.org/download/)
+- Einen **lokalen** Ordner, den OneDrive, Nextcloud Desktop oder Dropbox bereits
+  synchronisiert. Ein Freigabelink allein reicht nicht aus.
 
-Die Trefferanzahl ist je Suche auf 25, 50 oder 100 einstellbar. Quellen sind
-direkt in jeder Ergebniszeile mit einer visuellen Kennzeichnung für OpenAlex,
-Crossref oder DNB erkennbar.
+### 1. Starten
 
-ThULB, JSTOR, BASE, DDB, Europeana, K10plus/GVK, ZDB, EZB und DTA erscheinen
-als deutlich gekennzeichnete externe oder konfigurierte Quellen, nicht als
-vorgebliche API-Suche. Insbesondere bleibt JSTOR ohne institutionelle
-Metasearch-Lizenz deaktiviert; ein ThULB-Adapter wird erst nach dokumentierter
-und freigegebener Schnittstelle aktiviert.
+1. Dieses Repository herunterladen oder klonen.
+2. Im Projektordner `quickstart.bat` doppelklicken.
+3. Beim ersten Start Cloud-Anbieter und den lokalen, synchronisierten Ordner
+   eingeben. Den vorgeschlagenen Ordner können Sie mit Enter übernehmen.
+4. Warten, bis `Fertig! Alle Dienste laufen.` erscheint. Danach öffnet sich die
+   Oberfläche unter <http://localhost:8765>.
 
-## Voraussetzungen
+Der erste Docker-Start darf etwas dauern: Das Skript wartet bis zu vier Minuten
+auf Docker Desktop und danach bis zu zwei Minuten auf WebDAV. Währenddessen ist
+`Container zotero-webdav Creating` normal. Erst wenn die Wartezeit abläuft,
+zeigt das Skript Status und letzte Container-Logs als Fehlerhilfe.
 
-- Docker Desktop unter Windows
-- Ein lokal verfügbarer Ordner, den OneDrive, Nextcloud Desktop oder Dropbox
-  bereits synchronisiert
-- Zotero 10 mit dem MyLiteratureVault-Plugin (siehe unten)
+### 2. Zotero einmalig verbinden
 
-Ein Freigabelink allein ist kein beschreibbares Docker-Laufwerk. Verwenden Sie
-als `ZOTERO_STORAGE_PATH` immer den lokalen, vom Cloud-Desktop-Client
-synchronisierten Ordner.
-
-## Schnellstart unter Windows
-
-1. `quickstart.bat` starten.
-2. Beim ersten Durchlauf Anbieter, lokal synchronisierten Ordner und optional
-   einen Freigabelink angeben.
-3. Nach erfolgreichem Start sind diese lokalen Adressen verfügbar:
+1. In Zotero **Bearbeiten → Einstellungen → Sync → Datei-Synchronisation**
+   öffnen.
+2. Als Methode **WebDAV** wählen.
+3. Eintragen:
 
    ```text
-   WebDAV: http://localhost:8080
-   UI:     http://localhost:8765
+   URL:       http://localhost:8080
+   Benutzer:  zotero
+   Passwort:  siehe .env.local (beim ersten Start: changeme123)
    ```
 
-4. In Zotero unter **Einstellungen → Sync → Datei-Synchronisation → WebDAV**
-   die WebDAV-URL sowie Benutzername und Passwort aus `.env.local` eintragen.
+4. **Server prüfen** wählen.
 
-Der Schnellstart wartet bis zu vier Minuten auf Docker Desktop und anschließend
-bis zu zwei Minuten auf den WebDAV-Container. Die Meldung
-`Container zotero-webdav Creating` bedeutet während dieser Zeit, dass Docker
-den Container noch vorbereitet. Erst nach Ablauf der Wartezeit wird der
-Container-Status mitsamt den letzten Logs ausgegeben.
+Die Datei `.env.local` enthält Ihre lokale Konfiguration und wird nicht in Git
+committet. Ändern Sie `ZOTERO_STORAGE_PATH` nur auf einen tatsächlich lokal
+verfügbaren und von einem Cloud-Desktop-Client synchronisierten Ordner.
 
-Die lokale Konfiguration liegt in `.env.local` und wird nicht committed:
+### 3. MyLiteratureVault-Plugin installieren
 
-```text
-STORAGE_PROVIDER=onedrive
-ZOTERO_STORAGE_PATH=C:\Users\IhrName\OneDrive\MyLiteratureVault
-STORAGE_SHARE_URL=https://…
-```
+Das Plugin ist erforderlich, damit neu angelegte Projekte als Zotero-Sammlungen
+erscheinen und Recherchetreffer importiert werden können.
 
-`STORAGE_SHARE_URL` ist optional und dient nur als Verweis in der UI. Beim
-Wechsel des Speicherorts verschiebt MyLiteratureVault keine Daten automatisch;
-kopieren Sie vorhandene Forschungsdaten bewusst in den neuen synchronisierten
-Ordner, bevor Sie die alte Ablage entfernen.
-
-## Projekte und externe Datenablage
-
-Beim Anlegen eines Projekts erzeugt die UI im externen Speicher:
-
-```text
-Projekte/
-  Mein Projekt/
-    Literatur/
-    Quellen/
-```
-
-Projektstatus, Aufgaben und Referenzverknüpfungen liegen gemeinsam mit diesen
-Projektordnern im externen Speicher. Der Cloud-Desktop-Client synchronisiert
-sie; der mitgestartete Speicher-Monitor erstellt ausdrücklich keine Git-Commits
-für Zotero-Dateien.
-
-## Zotero-Projektsammlungen
-
-Nach dem Plugin-Abgleich entsteht in Zotero die passende Struktur:
-
-```text
-Meine Bibliothek/
-  Mein Projekt/
-    Literatur/
-    Quellen/
-```
-
-Das Plugin gleicht beim Zotero-Start und danach etwa alle 30 Sekunden ab. Für
-einen sofortigen Abgleich steht in Zotero unter **Ansicht** der Eintrag
-**MyLiteratureVault-Projekte mit Zotero synchronisieren** bereit. Bestehende
-Sammlungen werden wiederverwendet; der Abgleich löscht keine eigenen
-Zotero-Sammlungen.
-
-Die Projektdatei speichert die stabile Zuordnung aus Projekt-ID, Bibliothek und
-Collection-Key. Ist Zotero oder das Plugin beim Anlegen eines Projekts nicht
-gestartet, bleibt der Abgleich ausstehend und wird beim nächsten Plugin-Lauf
-nachgeholt. Im Projekt-Workspace kann zusätzlich **Zotero-Abgleich anfordern**
-gewählt werden.
-
-Einträge, die Sie in den Zotero-Unterordner **Literatur** oder **Quellen**
-ablegen, erscheinen automatisch im Quellenregal und bei der Aufgaben-
-Verknüpfung der UI. Die geöffnete UI aktualisiert diese Liste ungefähr alle
-30 Sekunden. **Zotero-Abgleich anfordern** markiert den Abgleich als
-ausstehend; das lokale Plugin übernimmt ihn beim nächsten Lauf. Ein Umbenennen
-eines UI-Projekts benennt die bestehende Zotero-Sammlung bewusst nicht
-automatisch um.
-
-## Plugin für Zotero 10 installieren
-
-Die aktuelle Erweiterung ist Version **0.4.2** und ist für Zotero `10.0.*`
-ausgelegt.
-
-1. Paket bauen:
+1. Im Projektordner PowerShell öffnen und das Paket bauen:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\build-zotero-plugin.ps1
@@ -162,50 +74,140 @@ ausgelegt.
 2. In Zotero **Extras → Erweiterungen → Zahnrad → Add-on aus Datei
    installieren…** wählen.
 3. `dist\myliteraturevault-zotero.xpi` auswählen und Zotero neu starten.
-4. Den manuellen Projekt-Abgleich unter **Ansicht** ausführen oder kurz auf den
-   automatischen Abgleich warten.
+4. In Zotero **Ansicht → MyLiteratureVault-Projekte mit Zotero
+   synchronisieren** wählen.
 
-Das Manifest enthält eine Update-Adresse, aber es wird derzeit kein
-veröffentlichtes XPI-Release über `updates.json` verteilt. Aktualisieren Sie das
-Plugin daher nach einem lokalen Build bewusst über **Add-on aus Datei
-installieren…**.
+Die Erweiterung ist Version **0.4.3** und für Zotero `10.0.*` vorgesehen. Sie
+prüft beim Start und danach etwa alle 30 Sekunden, ob ein Abgleich ansteht.
 
-Falls ein Projekt keine Sammlung erhält, prüfen Sie zuerst, ob die Erweiterung
-in Zotero aktiviert ist, starten Zotero neu und führen anschließend den
-manuellen Abgleich aus. Die UI unter `http://localhost:8765` zeigt den
-Verbindungs- und Abgleichstatus an.
+## So benutzen Sie das Tool
+
+### Projekt anlegen und mit Zotero prüfen
+
+1. In der Übersicht **Neues Projekt** wählen und einen Projektnamen vergeben.
+2. Öffnen Sie danach in Zotero **Meine Bibliothek**. Es sollte diese Struktur
+   geben:
+
+   ```text
+   Meine Bibliothek/
+     Ihr Projekt/
+       Literatur/
+       Quellen/
+   ```
+
+3. Fehlt die Sammlung, prüfen Sie, ob das Plugin aktiviert ist, starten Sie
+   Zotero neu und führen Sie den Menüpunkt für den Projekt-Abgleich erneut aus.
+
+![Projektordner und passende Zotero-Sammlung](docs/screenshots/03-ordnerstruktur.svg)
+
+### Literatur und Quellen recherchieren
+
+1. In der Übersicht oder im Projekt-Workspace einen Suchbegriff eingeben.
+2. Quellen aktivieren und die Trefferzahl wählen (25, 50 oder 100 pro Abruf).
+3. Die Liste bei Bedarf mit **Weitere Treffer laden** erweitern. Die Anzeige
+   nennt zusätzlich die von den Datenbanken gemeldete Gesamtzahl.
+4. Bereits geladene Treffer nach Titel, Autor:in, Jahr oder Provider filtern
+   und nach Titel, Autor:in, Jahr oder Provider sortieren.
+5. **Details** zeigt die verfügbaren bibliografischen Metadaten; **Original**
+   öffnet den Nachweis beim jeweiligen Provider.
+
+Aktiv recherchierbar sind OpenAlex, Crossref, die Deutsche Nationalbibliothek
+und der öffentliche ThULB-Jena-Katalog. JSTOR wird nicht gecrawlt: Sein XML
+Gateway setzt eine institutionelle Metasearch-Vereinbarung voraus und bleibt
+ohne diese Lizenz deaktiviert. Andere gekennzeichnete Anbieter sind externe
+oder konfigurationsabhängige Ziele.
+
+### Treffer merken und nach Zotero übernehmen
+
+1. Auf das Lesezeichen-Symbol eines Treffers klicken. Der Treffer landet in der
+   lokalen **Merkliste**.
+2. In der Merkliste das Zielprojekt auswählen.
+3. **Als Literatur** oder **Als Quelle** nach Zotero importieren wählen.
+4. In Zotero erscheint der Eintrag in der passenden Projekt-Untersammlung.
+
+Beim Import werden verfügbare Metadaten sowie Original- und gegebenenfalls
+Volltext-URL übergeben. Bereits vorhandene DOI-Einträge werden wiederverwendet.
+Geschützte PDFs werden weder heruntergeladen noch kopiert; ihre URL bleibt aber
+als Nachweis verfügbar.
+
+![Beispielansicht eines Projekts mit Quellenregal](docs/screenshots/02-projekt-zotero.svg)
+
+### Im Projekt weiterarbeiten
+
+- Legen Sie Aufgaben und Forschungsfragen im Workspace ab.
+- Fügen Sie eigene Titel direkt in Zotero unter **Literatur** oder **Quellen**
+  hinzu. Die UI aktualisiert ihr Quellenregal ungefähr alle 30 Sekunden.
+- Mit **Zotero-Abgleich anfordern** markieren Sie einen sofortigen Abgleich;
+  das Plugin erledigt ihn beim nächsten Durchlauf.
+
+## Wo liegen meine Daten?
+
+```text
+Synchronisierter Cloud-Ordner/
+  Projekte/
+    Ihr Projekt/
+      Literatur/
+      Quellen/
+```
+
+Dieser Ordner enthält Projektstatus, Aufgaben und lokale Zwischenspeicher. Ihr
+Cloud-Desktop-Client übernimmt die Synchronisierung. Der mitgestartete
+`auto-sync.ps1` ist nur ein Speicher-Aktivitätsmonitor und erzeugt keine
+Git-Commits für Zotero-Dateien. Umbenennen oder Löschen von Projekten bzw.
+Sammlungen geschieht bewusst nicht automatisch durch den Abgleich.
+
+## Wenn etwas nicht funktioniert
+
+| Problem | Erste Lösung |
+| --- | --- |
+| `Container zotero-webdav Creating` | Warten, bis der Quickstart die WebDAV-Prüfung beendet. Bei Ablauf: Docker Desktop öffnen und `quickstart.bat` erneut starten. |
+| Oberfläche nicht erreichbar | `check-status.bat` ausführen; bei Bedarf `start-ui.bat` starten. |
+| Projekt erscheint nicht in Zotero | Plugin aktivieren, Zotero neu starten, dann **Ansicht → MyLiteratureVault-Projekte mit Zotero synchronisieren** ausführen. |
+| Treffer fehlen oder ein Provider meldet Fehler | Provider erneut versuchen oder andere Quelle aktivieren. Ergebnisse und Fehler eines Providers blockieren die übrigen nicht. |
+| Keine Anhänge in GitHub | Das ist korrekt: Anhänge und Forschungsdaten bleiben im externen Speicher. |
 
 ## Nützliche Befehle
 
 ```powershell
-# WebDAV, Speicher-Monitor und UI starten bzw. prüfen
+# Dienste starten und UI öffnen
 .\quickstart.bat
+
+# Laufende Dienste und Git-Status prüfen
 .\check-status.bat
 
-# Nur die UI starten
+# Nur die lokale UI starten
 .\start-ui.bat
 
-# Plugin-Paket neu erzeugen
+# Zotero-Plugin neu bauen
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build-zotero-plugin.ps1
 ```
 
-## Git- und Datenschutzgrenzen
+## Technischer Überblick
+
+| Bestandteil | Aufgabe |
+| --- | --- |
+| `quickstart.ps1` / `quickstart.bat` | Richtet die lokale Konfiguration ein und startet Docker, WebDAV, UI und Monitor. |
+| `docker-compose.yml` | Bindet den externen Speicher als WebDAV-Volume ein. |
+| `vault-ui.ps1` und `ui/` | Lokaler Server, Forschungsprojekt-UI und APIs. |
+| `search/` | Suchdienst mit getrennten Adaptermodulen für die Provider. |
+| `zotero-plugin/` | Quellcode der Zotero-Erweiterung. |
+| `build-zotero-plugin.ps1` | Erzeugt `dist/myliteraturevault-zotero.xpi`. |
+
+Weitere technische Details für die Erweiterung stehen in
+[zotero-plugin/README.md](zotero-plugin/README.md).
+
+## Transparenz zur Entwicklung
+
+Bei der Konzeption und Weiterentwicklung dieses Tools wurden LLM-gestützte
+Coding-Agenten als Unterstützung für Entwurf, Implementierung, Refactoring,
+Tests und Dokumentation eingesetzt. Sie ersetzen weder die fachliche Prüfung
+von Forschungsfragen und Metadaten noch die Verantwortung der Nutzenden für
+ihre Daten, Lizenzen und wissenschaftlichen Aussagen.
+
+## Datenschutz und Git-Grenzen
 
 GitHub enthält nur den Quellcode dieses Repositories. `.gitignore` schützt
-`.env.local`, Laufzeitprotokolle, den früheren lokalen Fallback `data/` und die
-generierte XPI-Datei. WebDAV-Anhänge, Zotero-Daten und private
-Forschungsprojektdateien gehören ausschließlich in den externen,
-synchronisierten Speicher.
-
-## Wichtige Dateien
-
-| Datei | Zweck |
-| --- | --- |
-| `quickstart.ps1` / `quickstart.bat` | Richtet Speicher ein, wartet auf Docker und startet WebDAV, UI und Monitor. |
-| `docker-compose.yml` | Bindet `ZOTERO_STORAGE_PATH` in den WebDAV-Container ein. |
-| `vault-ui.ps1` | Lokaler Server sowie Projekt-, Zotero- und Speicher-API. |
-| `ui/` | Forschungsprojekt-UI. |
-| `search/` | Provider-unabhängiger Suchdienst und getrennte Adapter für OpenAlex, Crossref und DNB. |
-| `zotero-plugin/` | Zotero-Plugin-Quellen. |
-| `build-zotero-plugin.ps1` | Erzeugt `dist/myliteraturevault-zotero.xpi`. |
-| `auto-sync.ps1` | Reiner Speicher-Aktivitätsmonitor, kein Git-Sync. |
+`.env.local`, Laufzeitprotokolle, den lokalen Fallback `data/` und die
+generierte XPI-Datei. Zotero-Anhänge, private Forschungsprojektdateien und
+lokale Zugänge gehören ausschließlich in den externen, synchronisierten
+Speicher.
