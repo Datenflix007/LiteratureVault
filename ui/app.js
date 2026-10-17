@@ -7,6 +7,8 @@ const state = {
   actionProjectId: "",
   zotero: { available: false },
   zoteroSearchResults: [],
+  zoteroCollectionReferences: {},
+  zoteroCollectionLoading: {},
   searchTimer: null,
   conceptTimer: null,
   selectedTaskId: ""
@@ -57,6 +59,60 @@ function formatDate(value) {
 
 function projectById(id = state.selectedProjectId) {
   return state.projects.find((project) => project.id === id) || state.archivedProjects.find((project) => project.id === id) || null;
+}
+
+function zoteroCollectionKey(project) {
+  return String(project?.zotero?.collectionKey || "").trim().toUpperCase();
+}
+
+function collectionReferenceState(project) {
+  return project ? state.zoteroCollectionReferences[project.id] || null : null;
+}
+
+function projectReferences(project) {
+  const collection = collectionReferenceState(project);
+  const merged = new Map();
+  const addReference = (reference, kind, origin) => {
+    const zoteroKey = String(reference?.zoteroKey || "").trim().toUpperCase();
+    if (!zoteroKey) return;
+    merged.set(zoteroKey, { ...reference, zoteroKey, kind: origin === "collection" ? kind : reference.kind || kind, origin });
+  };
+
+  (collection?.literature || []).forEach((reference) => addReference(reference, "literature", "collection"));
+  (collection?.sources || []).forEach((reference) => addReference(reference, "source", "collection"));
+  (project?.references || []).forEach((reference) => addReference(reference, reference.kind || "literature", "manual"));
+  return Array.from(merged.values());
+}
+
+async function loadZoteroCollectionReferences(project) {
+  const collectionKey = zoteroCollectionKey(project);
+  if (!project || !collectionKey || state.zoteroCollectionLoading[project.id]) return;
+
+  state.zoteroCollectionLoading[project.id] = true;
+  try {
+    const response = await api("/api/projects/" + project.id + "/zotero-collection-items");
+    const collection = response && typeof response === "object" ? response : {};
+    const fallbackReferences = Array.isArray(collection.references) ? collection.references : [];
+    if (zoteroCollectionKey(projectById(project.id)) !== collectionKey) return;
+    state.zoteroCollectionReferences[project.id] = {
+      ...collection,
+      collectionKey,
+      literature: Array.isArray(collection.literature) ? collection.literature : fallbackReferences.filter((reference) => reference.kind === "literature"),
+      sources: Array.isArray(collection.sources) ? collection.sources : fallbackReferences.filter((reference) => reference.kind === "source")
+    };
+  } catch (error) {
+    if (zoteroCollectionKey(projectById(project.id)) !== collectionKey) return;
+    state.zoteroCollectionReferences[project.id] = {
+      collectionKey,
+      ready: false,
+      message: "Die Zotero-Projektsammlungen konnten nicht geladen werden: " + error.message,
+      literature: [],
+      sources: []
+    };
+  } finally {
+    delete state.zoteroCollectionLoading[project.id];
+    if (state.selectedProjectId === project.id) renderWorkspace();
+  }
 }
 
 function setSelectedProject(id) {
@@ -136,8 +192,8 @@ function renderSidebarProjects() {
   ).join("");
 }
 
-function workspaceTaskCard(task, project) {
-  const linked = (task.referenceKeys || []).map((key) => (project.references || []).find((reference) => reference.zoteroKey === key)).filter(Boolean);
+function workspaceTaskCard(task, references) {
+  const linked = (task.referenceKeys || []).map((key) => references.find((reference) => reference.zoteroKey === String(key || "").trim().toUpperCase())).filter(Boolean);
   const due = task.dueDate ? '<span class="task-due">◷ ' + esc(formatDate(task.dueDate)) + '</span>' : "";
   const issue = task.githubIssueUrl
     ? '<a class="issue-link" href="' + esc(task.githubIssueUrl) + '" target="_blank" rel="noreferrer">Issue #' + esc(task.githubIssueNumber) + ' ↗</a>'
@@ -151,18 +207,27 @@ function workspaceTaskCard(task, project) {
   '</article>';
 }
 
-function taskColumn(project, status, title, hint) {
+function taskColumn(project, references, status, title, hint) {
   const tasks = (project.tasks || project.todos || []).filter((task) => task.status === status);
-  return '<section class="task-column status-' + status + '"><header><div><span class="column-dot"></span><h4>' + title + '</h4></div><span>' + tasks.length + '</span></header><p class="column-hint">' + hint + '</p><div class="task-list">' + (tasks.length ? tasks.map((task) => workspaceTaskCard(task, project)).join("") : '<p class="empty-mini">Keine Aufgaben.</p>') + '</div></section>';
+  return '<section class="task-column status-' + status + '"><header><div><span class="column-dot"></span><h4>' + title + '</h4></div><span>' + tasks.length + '</span></header><p class="column-hint">' + hint + '</p><div class="task-list">' + (tasks.length ? tasks.map((task) => workspaceTaskCard(task, references)).join("") : '<p class="empty-mini">Keine Aufgaben.</p>') + '</div></section>';
 }
 
-function sourceShelf(project, kind, label, icon) {
-  const references = (project.references || []).filter((reference) => reference.kind === kind);
+function sourceShelf(project, allReferences, kind, label, icon, collectionState, collectionLoading) {
+  const references = allReferences.filter((reference) => reference.kind === kind);
   const cards = references.length ? references.map((reference) => {
     const metadata = [reference.creators, reference.year, reference.itemType].filter(Boolean).join(" · ");
     const external = reference.doi ? "https://doi.org/" + encodeURIComponent(reference.doi.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "")) : reference.url;
-    return '<article class="source-card"><div class="source-card-head"><span class="source-key">' + esc(reference.zoteroKey) + '</span><button type="button" class="icon-button small" title="Verknüpfung aus Projekt entfernen" data-remove-reference="' + reference.id + '">×</button></div><h4>' + esc(reference.title) + '</h4><p>' + esc(metadata || "Zotero-Eintrag") + '</p>' + (reference.note ? '<blockquote>' + nl(reference.note) + '</blockquote>' : "") + '<div class="source-links"><a href="zotero://select/library/items/' + esc(reference.zoteroKey) + '">In Zotero öffnen</a>' + (external ? '<a href="' + esc(external) + '" target="_blank" rel="noreferrer">Web ↗</a>' : "") + '</div></article>';
-  }).join("") : '<div class="source-empty"><p>Noch keine ' + esc(label.toLowerCase()) + ' verknüpft.</p><button type="button" class="quiet-btn" data-add-source>Aus Zotero hinzufügen</button></div>';
+    const action = reference.origin === "collection"
+      ? '<span class="source-key" title="Direkt aus der Zotero-Projektsammlung gelesen">Projekt-Sammlung</span>'
+      : '<button type="button" class="icon-button small" title="Verknüpfung aus Projekt entfernen" data-remove-reference="' + esc(reference.id) + '">×</button>';
+    return '<article class="source-card"><div class="source-card-head"><span class="source-key">' + esc(reference.zoteroKey) + '</span>' + action + '</div><h4>' + esc(reference.title) + '</h4><p>' + esc(metadata || "Zotero-Eintrag") + '</p>' + (reference.note ? '<blockquote>' + nl(reference.note) + '</blockquote>' : "") + '<div class="source-links"><a href="zotero://select/library/items/' + esc(reference.zoteroKey) + '">In Zotero öffnen</a>' + (external ? '<a href="' + esc(external) + '" target="_blank" rel="noreferrer">Web ↗</a>' : "") + '</div></article>';
+  }).join("") : '<div class="source-empty"><p>' + esc(
+    collectionLoading
+      ? "Zotero-Sammlung wird geladen …"
+      : collectionState?.message || (zoteroCollectionKey(project)
+        ? "Noch keine " + label.toLowerCase() + " in der Zotero-Sammlung."
+        : "Die Projekt-Sammlungen werden nach dem ersten Zotero-Plugin-Abgleich automatisch hier angezeigt.")
+  ) + '</p><button type="button" class="quiet-btn" data-add-source>Aus Zotero zusätzlich verknüpfen</button></div>';
   return '<section class="source-shelf"><header><div><span class="shelf-icon">' + icon + '</span><div><p class="eyebrow">ZOTERO</p><h3>' + esc(label) + '</h3></div></div><span>' + references.length + '</span></header><div class="source-list">' + cards + '</div></section>';
 }
 
@@ -177,28 +242,45 @@ function researchConceptEditor(project) {
 
 function renderWorkspace() {
   const project = projectById();
-  $("workspaceEmpty").hidden = Boolean(project);
   $("workspaceContent").hidden = !project;
   if (!project) return;
   const phase = phaseLabels[project.status] || "Konzept";
-  const question = project.researchQuestion || "Formuliere hier die Frage, die dein Projekt leitet.";
-  const goal = project.paperGoal || "Definiere eine Arbeitsthese oder ein klares Ergebnis, auf das du hinarbeitest.";
+  const question = project.researchQuestion || "";
+  const goal = project.paperGoal || "";
   const conceptQuestion = project.researchConcept?.question || question;
+  const researchQuestionCard = conceptQuestion
+    ? '<section class="research-question-card"><p class="eyebrow">LEITENDE FORSCHUNGSFRAGE</p><h3>' + nl(conceptQuestion) + '</h3>' + (goal ? '<div><span>Arbeitsthese / Ziel</span><p>' + nl(goal) + '</p></div>' : '') + '</section>'
+    : "";
   const zotero = project.zotero || {};
+  const collectionState = collectionReferenceState(project);
+  let collectionLoading = Boolean(state.zoteroCollectionLoading[project.id]);
+  if (zoteroCollectionKey(project) && !collectionState && !collectionLoading) {
+    void loadZoteroCollectionReferences(project);
+    collectionLoading = true;
+  }
+  const references = projectReferences(project);
+  const literatureCount = references.filter((reference) => reference.kind === "literature").length;
+  const sourceCount = references.filter((reference) => reference.kind === "source").length;
   const zoteroLabel = zotero.status === "linked" ? "Zotero: " + (zotero.collectionName || "verknüpft") : "Zotero-Abgleich ausstehend";
   $("projectWorkspace").innerHTML =
     '<section class="workspace-header compact-header phase-' + esc(project.status) + '"><div class="workspace-title"><p class="eyebrow">' + esc(phase) + ' · ' + (project.deadline ? "Termin " + esc(formatDate(project.deadline)) : "Termin offen") + '</p><h2>' + esc(project.name) + '</h2><div class="workspace-meta"><span class="state">' + esc(project.projectType || "Projekt") + '</span><span class="zotero-state ' + esc(zotero.status || "pending") + '">' + esc(zoteroLabel) + '</span></div></div>' + progressRing(project.progress, "Aufgaben") + '</section>' +
-    '<section class="research-question-card"><p class="eyebrow">LEITENDE FORSCHUNGSFRAGE</p><h3>' + nl(conceptQuestion) + '</h3><div><span>Arbeitsthese / Ziel</span><p>' + nl(goal) + '</p></div></section>' +
-    '<div class="workspace-metrics compact-metrics"><article><span>Aufgaben</span><strong>' + (project.todoCount || 0) + '</strong><p>' + (project.inProgressTodoCount || 0) + ' in Arbeit · ' + (project.doneTodoCount || 0) + ' erledigt</p></article><article><span>Literatur</span><strong>' + (project.literatureCount || 0) + '</strong><p>aus Zotero verknüpft</p></article><article><span>Quellen</span><strong>' + (project.sourceCount || 0) + '</strong><p>aus Zotero verknüpft</p></article><article><span>Termin</span><strong class="date-metric">' + esc(project.deadline ? formatDate(project.deadline) : "—") + '</strong><p>Projektbrief</p></article></div>' +
+    researchQuestionCard +
+    '<div class="workspace-metrics compact-metrics"><article><span>Aufgaben</span><strong>' + (project.todoCount || 0) + '</strong><p>' + (project.inProgressTodoCount || 0) + ' in Arbeit · ' + (project.doneTodoCount || 0) + ' erledigt</p></article><article><span>Literatur</span><strong>' + literatureCount + '</strong><p>aus der Zotero-Projektsammlung</p></article><article><span>Quellen</span><strong>' + sourceCount + '</strong><p>aus der Zotero-Projektsammlung</p></article><article><span>Termin</span><strong class="date-metric">' + esc(project.deadline ? formatDate(project.deadline) : "—") + '</strong><p>Projektbrief</p></article></div>' +
     researchConceptEditor(project) +
     '<section class="tasks-panel panel-card"><header><div><p class="eyebrow">LOKALE ISSUES</p><h3>Aufgaben</h3><p class="hint">Jede Aufgabe hat eine lokale Issue-Nummer, Verlauf, Kommentare und Checkliste.</p></div><button type="button" class="primary-btn compact" data-new-task>+ Aufgabe</button></header><div class="task-board">' +
-      taskColumn(project, "open", "Offen", "Nächster sinnvoller Schritt") + taskColumn(project, "in_progress", "In Arbeit", "Gerade im Fokus") + taskColumn(project, "blocked", "Blockiert", "Benötigt eine Klärung") + taskColumn(project, "done", "Erledigt", "Dokumentierter Fortschritt") +
+      taskColumn(project, references, "open", "Offen", "Nächster sinnvoller Schritt") + taskColumn(project, references, "in_progress", "In Arbeit", "Gerade im Fokus") + taskColumn(project, references, "blocked", "Blockiert", "Benötigt eine Klärung") + taskColumn(project, references, "done", "Erledigt", "Dokumentierter Fortschritt") +
     '</div></section>' +
-    '<section class="sources-panel"><header class="section-heading"><div><p class="eyebrow">QUELLENREGAL</p><h2>Verknüpfte Zotero-Literatur</h2><p>Ein Klick auf „In Zotero öffnen“ führt direkt zum Originaleintrag. Beim nächsten Plugin-Abgleich erscheinen die Einträge zusätzlich in den Projekt-Sammlungen.</p></div><button type="button" class="primary-btn" data-add-source>+ Aus Zotero verknüpfen</button></header><div class="source-grid">' + sourceShelf(project, "literature", "Literatur", "▣") + sourceShelf(project, "source", "Quellen", "⌁") + '</div></section>';
+    '<section class="sources-panel"><header class="section-heading"><div><p class="eyebrow">QUELLENREGAL</p><h2>Zotero-Projektsammlungen</h2><p>Die Unterordner „Literatur“ und „Quellen“ deiner Projekt-Sammlung werden automatisch aus Zotero gelesen. „In Zotero öffnen“ führt direkt zum Originaleintrag.</p></div><button type="button" class="primary-btn" data-add-source>+ Zusätzlich verknüpfen</button></header><div class="source-grid">' + sourceShelf(project, references, "literature", "Literatur", "▣", collectionState, collectionLoading) + sourceShelf(project, references, "source", "Quellen", "⌁", collectionState, collectionLoading) + '</div></section>';
 }
 
 async function loadProjects() {
   state.projects = await api("/api/projects");
+  Object.keys(state.zoteroCollectionReferences).forEach((projectId) => {
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project || state.zoteroCollectionReferences[projectId].collectionKey !== zoteroCollectionKey(project)) {
+      delete state.zoteroCollectionReferences[projectId];
+    }
+  });
   if (state.selectedProjectId && !projectById()) setSelectedProject("");
   if (!state.selectedProjectId && state.projects.length) setSelectedProject(state.projects[0].id);
   renderProjects();
@@ -225,9 +307,11 @@ async function loadStatus() {
   $("repoName").textContent = (storage.provider || "lokal") + " · externer Speicher";
   $("storageBadge").textContent = storage.available ? (storage.provider || "lokal") + " verbunden" : "Speicher prüfen";
   $("storageBadge").className = storage.available ? "badge-online" : "badge-warning";
-  $("zoteroBadge").textContent = zotero.available ? "Zotero verbunden" : "Zotero nicht erreichbar";
-  $("zoteroBadge").className = zotero.available ? "badge-online" : "badge-warning";
-  $("zoteroBadge").title = zotero.message || "";
+  const plugin = zotero.plugin || {};
+  const syncReady = zotero.available && plugin.active;
+  $("zoteroBadge").textContent = !zotero.available ? "Zotero nicht erreichbar" : syncReady ? "Zotero + Plugin verbunden" : "Zotero-Plugin aktualisieren";
+  $("zoteroBadge").className = syncReady ? "badge-online" : "badge-warning";
+  $("zoteroBadge").title = [zotero.message, plugin.message].filter(Boolean).join("\n");
   $("syncBadge").textContent = status.ahead + " ↑ / " + status.behind + " ↓ Code";
   $("statusLine").textContent = storage.available
     ? "Cloud-Projekte und Anhänge: " + storage.path + " — außerhalb von Git und Git LFS"
@@ -383,8 +467,9 @@ async function restoreProject(projectId) {
 }
 
 function taskReferenceOptions(project, selectedKeys = []) {
-  const references = project.references || [];
-  return references.length ? references.map((reference) => '<label class="reference-option"><input type="checkbox" name="taskReference" value="' + esc(reference.zoteroKey) + '"' + (selectedKeys.includes(reference.zoteroKey) ? " checked" : "") + '><span><strong>' + esc(reference.title) + '</strong><small>' + esc([reference.creators, reference.year].filter(Boolean).join(" · ") || reference.zoteroKey) + '</small></span></label>').join("") : '<p class="empty-mini">Füge zunächst Literatur oder Quellen aus Zotero hinzu.</p>';
+  const references = projectReferences(project);
+  const selected = new Set(selectedKeys.map((key) => String(key || "").trim().toUpperCase()));
+  return references.length ? references.map((reference) => '<label class="reference-option"><input type="checkbox" name="taskReference" value="' + esc(reference.zoteroKey) + '"' + (selected.has(reference.zoteroKey) ? " checked" : "") + '><span><strong>' + esc(reference.title) + '</strong><small>' + esc([reference.creators, reference.year].filter(Boolean).join(" · ") || reference.zoteroKey) + '</small></span></label>').join("") : '<p class="empty-mini">Die Literatur und Quellen der Zotero-Projektsammlung erscheinen hier automatisch nach dem Abgleich.</p>';
 }
 
 function openTaskDialog(task = null) {
@@ -740,6 +825,7 @@ $("syncZoteroBtn").addEventListener("click", async () => {
   const project = projectById();
   if (!project) return;
   await api("/api/projects/" + project.id + "/zotero-collection/request", { method: "POST", body: "{}" });
+  delete state.zoteroCollectionReferences[project.id];
   await loadProjects();
   renderWorkspace();
   toast("Zotero-Abgleich angefordert. Das lokale Zotero-Plugin übernimmt ihn beim nächsten Lauf.");
@@ -766,6 +852,12 @@ $("commitBtn").addEventListener("click", openCommitDialog);
 $("commitForm").addEventListener("submit", (event) => doManualCommit(event).catch((error) => toast(error.message, "error")));
 $("stopServerBtn").addEventListener("click", () => stopServer().catch((error) => toast(error.message, "error")));
 $("sidebarToggle").addEventListener("click", () => document.body.classList.toggle("sidebar-collapsed"));
+
+window.setInterval(() => {
+  const project = projectById();
+  if (document.hidden || !project || !zoteroCollectionKey(project)) return;
+  void loadZoteroCollectionReferences(project);
+}, 30000);
 
 (function setupSidebarResize() {
   const handle = $("resizeHandle");

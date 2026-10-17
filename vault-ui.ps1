@@ -612,12 +612,42 @@ function ConvertTo-ProjectReference {
     }
 }
 
+function Get-ZoteroPluginStatus {
+    $profileRoot = Join-Path $env:APPDATA "Zotero\Zotero\Profiles"
+    if (-not (Test-Path -LiteralPath $profileRoot)) {
+        return @{ installed = $false; active = $false; version = ""; message = "Kein Zotero-Profil gefunden." }
+    }
+    $extensionFiles = @(Get-ChildItem -LiteralPath $profileRoot -Filter "extensions.json" -File -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    foreach ($extensionFile in $extensionFiles) {
+        try {
+            $registry = Get-Content -LiteralPath $extensionFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            $addon = @($registry.addons | Where-Object { $_.id -eq "myliteraturevault@datenflix007.github" } | Select-Object -First 1)
+            if (-not $addon) { continue }
+            $active = [bool]$addon[0].active -and -not [bool]$addon[0].appDisabled -and -not [bool]$addon[0].userDisabled
+            $message = if ($active) {
+                "MyLiteratureVault-Plugin $($addon[0].version) ist aktiv."
+            } elseif ($addon[0].appDisabled) {
+                "MyLiteratureVault-Plugin $($addon[0].version) ist mit dieser Zotero-Version nicht kompatibel."
+            } elseif ($addon[0].userDisabled) {
+                "MyLiteratureVault-Plugin $($addon[0].version) wurde in Zotero deaktiviert."
+            } else {
+                "MyLiteratureVault-Plugin $($addon[0].version) ist nicht aktiv."
+            }
+            return @{ installed = $true; active = $active; version = "$($addon[0].version)"; message = $message }
+        } catch {
+            continue
+        }
+    }
+    return @{ installed = $false; active = $false; version = ""; message = "MyLiteratureVault-Plugin ist nicht installiert." }
+}
+
 function Get-ZoteroStatus {
+    $plugin = Get-ZoteroPluginStatus
     try {
         $items = @(Invoke-ZoteroLocalApi "/users/0/items/top?format=json&limit=1")
-        return @{ available = $true; message = "Zotero ist lokal verbunden"; sampleCount = $items.Count }
+        return @{ available = $true; message = "Zotero ist lokal verbunden"; sampleCount = $items.Count; plugin = $plugin }
     } catch {
-        return @{ available = $false; message = "$($_.Exception.Message)" }
+        return @{ available = $false; message = "$($_.Exception.Message)"; plugin = $plugin }
     }
 }
 
@@ -639,6 +669,83 @@ function Get-ZoteroReferenceByKey {
     $reference = ConvertTo-ProjectReference $item
     if ($null -eq $reference) { throw "Der gewählte Zotero-Eintrag kann nicht als Literatur oder Quelle verknüpft werden." }
     return $reference
+}
+
+function Get-ZoteroCollectionPage {
+    param([string]$Path)
+    return @(Invoke-ZoteroLocalApi $Path)
+}
+
+function Get-ZoteroCollectionChildren {
+    param([string]$CollectionKey)
+    $children = @()
+    $start = 0
+    do {
+        $page = @(Get-ZoteroCollectionPage "/users/0/collections/${CollectionKey}/collections?format=json&limit=100&start=$start")
+        $children += @($page)
+        $start += $page.Count
+    } while ($page.Count -eq 100)
+    return @($children)
+}
+
+function Get-ZoteroCollectionReferences {
+    param([string]$CollectionKey)
+    $references = @()
+    $start = 0
+    do {
+        # Top-Level-Einträge reichen hier aus: Kind-Anhänge, Notizen und Annotationen
+        # gehören nicht in das Quellenregal und werden zusätzlich beim Konvertieren gefiltert.
+        $page = @(Get-ZoteroCollectionPage "/users/0/collections/${CollectionKey}/items/top?format=json&limit=100&start=$start")
+        $references += @($page)
+        $start += $page.Count
+    } while ($page.Count -eq 100)
+    return @($references)
+}
+
+function Get-ZoteroProjectCollectionReferences {
+    param($Project)
+    Ensure-ProjectModel $Project
+    $rootCollectionKey = "$($Project.zoteroCollectionKey)".Trim().ToUpperInvariant()
+    if ($rootCollectionKey -notmatch "^[A-Z0-9]{8}$") {
+        return @{ ready = $false; message = "Die Zotero-Projektsammlungen werden nach dem ersten Plugin-Abgleich automatisch hier gelesen."; literature = @(); sources = @(); references = @() }
+    }
+
+    try {
+        # Die lokale Zotero-Web-API verwendet users/0 für Meine Bibliothek. Die
+        # vom Desktop-Plugin gespeicherte Library-ID ist bewusst kein Web-API-Pfad.
+        $children = @(Get-ZoteroCollectionChildren $rootCollectionKey)
+        $result = [ordered]@{ ready = $true; message = "Inhalte der Zotero-Unterordner Literatur und Quellen."; literature = @(); sources = @(); references = @() }
+        $missingFolders = @()
+
+        foreach ($definition in @(
+            @{ name = "Literatur"; kind = "literature"; resultKey = "literature" },
+            @{ name = "Quellen"; kind = "source"; resultKey = "sources" }
+        )) {
+            $folder = @($children | Where-Object { "$($_.data.name)" -ieq $definition.name } | Select-Object -First 1)
+            if (-not $folder) {
+                $missingFolders += $definition.name
+                continue
+            }
+            $folderKey = "$($folder[0].data.key)".Trim().ToUpperInvariant()
+            if ($folderKey -notmatch "^[A-Z0-9]{8}$") { continue }
+            foreach ($item in @(Get-ZoteroCollectionReferences $folderKey)) {
+                $reference = ConvertTo-ProjectReference $item
+                if ($null -eq $reference) { continue }
+                $reference | Add-Member -NotePropertyName kind -NotePropertyValue $definition.kind
+                $reference | Add-Member -NotePropertyName origin -NotePropertyValue "collection"
+                $reference | Add-Member -NotePropertyName collectionKey -NotePropertyValue $folderKey
+                $result[$definition.resultKey] += @($reference)
+            }
+        }
+
+        $result.references = @($result.literature + $result.sources | Group-Object zoteroKey | ForEach-Object { $_.Group[0] })
+        if ($missingFolders.Count) {
+            $result.message = "In der Zotero-Projektsammlung fehlen noch: " + ($missingFolders -join ", ") + "."
+        }
+        return $result
+    } catch {
+        return @{ ready = $false; message = "Die Zotero-Projektsammlungen konnten nicht gelesen werden: $($_.Exception.Message)"; literature = @(); sources = @(); references = @() }
+    }
 }
 
 function Add-ProjectReference {
@@ -991,6 +1098,10 @@ function Handle-Api {
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/zotero-collection$" -and $method -eq "POST") {
             Send-Json $Context (Set-ProjectZoteroCollection $matches[1] (Read-JsonBody $Context.Request))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/zotero-collection-items$" -and $method -eq "GET") {
+            Send-Json $Context (Get-ZoteroProjectCollectionReferences (Get-ProjectById $matches[1]))
             return
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/zotero-collection/request$" -and $method -eq "POST") {

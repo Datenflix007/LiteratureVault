@@ -133,8 +133,8 @@ main { min-width: 0; padding: 28px clamp(18px, 3vw, 46px) 48px; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0 30px; }
 .metric-card { min-height: 124px; padding: 16px; border: 1px solid var(--line); border-radius: 13px; background: linear-gradient(145deg, rgb(21 31 44 / .9), rgb(12 20 30 / .9)); }.metric-card span { color: var(--muted); font-size: .74rem; }.metric-card strong { display: block; margin: 6px 0 1px; color: #eef8ff; font-size: 1.75rem; letter-spacing: -.05em; }.metric-card p { color: var(--faint); font-size: .7rem; }
 .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 20px 0 12px; }.section-heading h2 { margin-top: 3px; }.section-heading > div > p:not(.eyebrow) { max-width: 780px; margin-top: 5px; color: var(--muted); font-size: .8rem; }
-.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(285px, 1fr)); gap: 13px; }
-.project-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: #101925; }
+.project-grid { display: block; width: 100%; }
+.project-table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: #101925; }
 .project-table { width: 100%; min-width: 1080px; border-collapse: collapse; text-align: left; font-size: .8rem; }
 .project-table th { padding: 10px 12px; color: var(--muted); border-bottom: 1px solid var(--line); font-size: .65rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .project-table td { padding: 12px; border-bottom: 1px solid var(--line-soft); color: #c6d3df; vertical-align: middle; }

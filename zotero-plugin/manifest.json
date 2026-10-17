@@ -1,22 +1,16 @@
 {
   "manifest_version": 2,
   "name": "MyLiteratureVault",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Synchronizes MyLiteratureVault research projects, collections, and linked references with Zotero.",
   "author": "Datenflix007",
-  "homepage_url": "https://github.com/Datenflix007/MyLiteratureVault",
+  "homepage_url": "https://github.com/Datenflix007/zotero-webdav-GithubViaDocker",
   "applications": {
     "zotero": {
       "id": "myliteraturevault@datenflix007.github",
+      "update_url": "https://raw.githubusercontent.com/Datenflix007/zotero-webdav-GithubViaDocker/main/updates.json",
       "strict_min_version": "10.0",
       "strict_max_version": "10.0.*"
-    }
-  },
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "myliteraturevault@datenflix007.github",
-      "strict_min_version": "115.0",
-      "strict_max_version": "*"
     }
   }
 }
