@@ -161,6 +161,7 @@ function Ensure-ProjectModel {
         researchClassifications = @()
         savedResearchSearches = @()
         zoteroImportQueue = @()
+        historyCommitHashes = @()
         archivedAt = ""
         trashedAt = ""
         zoteroLibraryID = $null
@@ -201,6 +202,7 @@ function Ensure-ProjectModel {
     $Project.researchSettings.importantTerms = @($Project.researchSettings.importantTerms | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -Unique)
     $Project.savedResearchSearches = @($Project.savedResearchSearches | Where-Object { $null -ne $_ })
     $Project.zoteroImportQueue = @($Project.zoteroImportQueue | Where-Object { $null -ne $_ })
+    $Project.historyCommitHashes = @($Project.historyCommitHashes | ForEach-Object { "$_".Trim().ToLowerInvariant() } | Where-Object { $_ -match '^[a-f0-9]{40}$' } | Select-Object -Unique)
     if ($null -eq $Project.PSObject.Properties['researchClassifications'] -or $null -eq $Project.researchClassifications) { Set-ModelProperty $Project 'researchClassifications' @() }
     $Project.researchClassifications = @($Project.researchClassifications | Where-Object { $null -ne $_ -and "$($_.resultId)" -match '^[a-f0-9]{40}$' -and "$($_.category)" -in @('source', 'literature') })
 
@@ -1080,6 +1082,17 @@ function Send-Json {
     Send-Response $Context $Status (ConvertTo-Json -InputObject $Object -Depth 20)
 }
 
+function Send-Bytes {
+    param($Context, [byte[]]$Bytes, [string]$ContentType, [string]$FileName)
+    $Context.Response.StatusCode = 200
+    $Context.Response.ContentType = $ContentType
+    $Context.Response.Headers.Add("Content-Disposition", "attachment; filename=`"$FileName`"")
+    $Context.Response.Headers.Add("Access-Control-Allow-Origin", "*")
+    $Context.Response.ContentLength64 = $Bytes.Length
+    $Context.Response.OutputStream.Write($Bytes, 0, $Bytes.Length)
+    $Context.Response.Close()
+}
+
 function Read-JsonBody {
     param($Request)
     $reader = New-Object IO.StreamReader($Request.InputStream, $Request.ContentEncoding)
@@ -1126,6 +1139,131 @@ function Get-Log {
         }
     }
     return $commits
+}
+
+function Get-GitCommitGraph {
+    # Record and field separators keep subjects and decoration labels intact.
+    $format = '%H%x1f%P%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D%x1e'
+    $raw = (& git log --all --topo-order --date=iso-strict --max-count=160 "--pretty=format:$format" 2>$null) -join "`n"
+    $commits = @()
+    foreach ($record in @($raw -split [char]30)) {
+        $fields = $record.Trim() -split [char]31
+        if ($fields.Count -lt 8 -or "$($fields[0])" -notmatch '^[a-f0-9]{40}$') { continue }
+        $refs = @("$($fields[7])" -split ',\s*' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $commits += [PSCustomObject]@{
+            hash = "$($fields[0])"; parents = @("$($fields[1])" -split '\s+' | Where-Object { $_ -match '^[a-f0-9]{40}$' })
+            short = "$($fields[2])"; author = "$($fields[3])"; email = "$($fields[4])"; date = "$($fields[5])"; subject = "$($fields[6])"; refs = $refs
+        }
+    }
+    return @($commits)
+}
+
+function Get-ProjectHistoryPayload {
+    param([string]$ProjectId)
+    $project = Get-ProjectById $ProjectId
+    $commits = @(Get-GitCommitGraph)
+    $linked = @($project.historyCommitHashes)
+    return [PSCustomObject]@{
+        project = Get-ProjectSummary $project
+        commits = $commits
+        linkedCommitHashes = $linked
+        branchCount = @($commits | ForEach-Object { $_.refs } | Where-Object { $_ -and $_ -notmatch '^tag:' } | Select-Object -Unique).Count
+        mergeCount = @($commits | Where-Object { @($_.parents).Count -gt 1 }).Count
+    }
+}
+
+function Set-ProjectCommitLink {
+    param([string]$ProjectId, [string]$CommitHash, [bool]$Linked)
+    $hash = "$CommitHash".Trim().ToLowerInvariant()
+    if ($hash -notmatch '^[a-f0-9]{40}$') { throw 'Ungültiger Commit-Hash.' }
+    if (-not (@(Get-GitCommitGraph | Where-Object { $_.hash -eq $hash } | Select-Object -First 1))) { throw 'Der Commit ist in diesem Repository nicht vorhanden.' }
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw 'Projekt wurde nicht gefunden.' }
+    $existing = @($project[0].historyCommitHashes)
+    $project[0].historyCommitHashes = if ($Linked) { @($existing + $hash | Select-Object -Unique) } else { @($existing | Where-Object { $_ -ne $hash }) }
+    $project[0].updatedAt = (Get-Date).ToString('o')
+    Save-ProjectStore $store
+    return Get-ProjectHistoryPayload $ProjectId
+}
+
+function ConvertTo-ProjectReportHtml {
+    param($History)
+    $project = $History.project
+    $encode = { param($value) [System.Net.WebUtility]::HtmlEncode("$value") }
+    $tasks = @($project.todos)
+    $references = @($project.references)
+    $linked = @($History.linkedCommitHashes)
+    $reportCommits = if ($linked.Count) { @($History.commits | Where-Object { $linked -contains $_.hash }) } else { @($History.commits | Select-Object -First 40) }
+    $taskRows = if ($tasks.Count) { ($tasks | ForEach-Object { "<tr><td>#$( & $encode $_.issueNumber )</td><td>$( & $encode $_.title )</td><td>$( & $encode $_.status )</td><td>$( & $encode $_.dueDate )</td></tr>" }) -join "`n" } else { '<tr><td colspan="4">Keine lokalen Aufgaben.</td></tr>' }
+    $referenceRows = if ($references.Count) { ($references | ForEach-Object { "<li><strong>$( & $encode $_.title )</strong><br><small>$( & $encode "$($_.creators) $($_.year)" )</small></li>" }) -join "`n" } else { '<li>Keine manuell verknüpften Quellen.</li>' }
+    $commitRows = if ($reportCommits.Count) { ($reportCommits | ForEach-Object { "<tr><td><code>$( & $encode $_.short )</code></td><td>$( & $encode $_.subject )</td><td>$( & $encode $_.author )</td><td>$( & $encode $_.date )</td><td>$( & $encode ($_.refs -join ', ') )</td></tr>" }) -join "`n" } else { '<tr><td colspan="5">Noch keine Commits zum Projekt zugeordnet.</td></tr>' }
+    $question = if ($project.researchQuestion) { $project.researchQuestion } else { $project.researchConcept.question }
+@"
+<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Projektbericht - $(& $encode $project.name)</title>
+<style>body{max-width:920px;margin:36px auto;padding:0 24px;color:#1c2733;font:14px/1.5 Arial,sans-serif}h1{margin-bottom:0}h2{margin-top:34px;border-bottom:2px solid #258bd1;padding-bottom:6px}small{color:#506274}table{border-collapse:collapse;width:100%}th,td{padding:8px;border-bottom:1px solid #d7e0e7;text-align:left;vertical-align:top}th{background:#edf6fb}code{color:#1267a2}li{margin:8px 0}.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:22px 0}.meta div{padding:12px;background:#f3f7fa;border-radius:8px}.meta strong{display:block}@media print{body{margin:0;max-width:none}h2{break-after:avoid}table{font-size:11px}}</style></head><body>
+<p><small>MyLiteratureVault - lokaler Projektbericht - erstellt am $(& $encode (Get-Date -Format 'yyyy-MM-dd HH:mm'))</small></p><h1>$(& $encode $project.name)</h1><p>$(& $encode $question)</p>
+<div class="meta"><div><strong>Status</strong>$(& $encode $project.status)</div><div><strong>Aufgaben</strong>$($tasks.Count) gesamt / $(@($tasks | Where-Object { $_.status -ne 'done' }).Count) offen</div><div><strong>Code-Historie</strong>$($History.commits.Count) Commits / $($History.mergeCount) Merges</div></div>
+<h2>Projektbrief</h2><p><strong>Ziel:</strong> $(& $encode $project.paperGoal)</p><p><strong>Hypothese:</strong> $(& $encode $project.hypothesis)</p><p><strong>Gliederung:</strong><br>$(& $encode $project.outline)</p>
+<h2>Aufgaben</h2><table><thead><tr><th>Nr.</th><th>Titel</th><th>Status</th><th>Termin</th></tr></thead><tbody>$taskRows</tbody></table>
+<h2>Literatur und Quellen</h2><ul>$referenceRows</ul>
+<h2>Git-Historie</h2><p><small>$(if ($linked.Count) { 'Dem Projekt zugeordnete Commits.' } else { 'Repository-Historie im Projektkontext; Commits können in der Anwendung zugeordnet werden.' })</small></p><table><thead><tr><th>Commit</th><th>Nachricht</th><th>Autor:in</th><th>Datum</th><th>Branch / Tag</th></tr></thead><tbody>$commitRows</tbody></table>
+</body></html>
+"@
+}
+
+function ConvertTo-PdfSafeText {
+    param([string]$Value)
+    $text = "$Value"
+    $replacements = @(
+        @('ä', 'ae'), @('ö', 'oe'), @('ü', 'ue'), @('Ä', 'Ae'), @('Ö', 'Oe'), @('Ü', 'Ue'), @('ß', 'ss'), @('–', '-'), @('—', '-')
+    )
+    foreach ($replacement in $replacements) { $text = $text.Replace($replacement[0], $replacement[1]) }
+    return (($text -replace '[^\x20-\x7E]', '?') -replace '\\', '\\\\' -replace '\(', '\\(' -replace '\)', '\\)')
+}
+
+function Write-PdfAscii {
+    param($Stream, [string]$Value)
+    $bytes = [Text.Encoding]::ASCII.GetBytes($Value)
+    $Stream.Write($bytes, 0, $bytes.Length)
+}
+
+function New-ProjectReportPdfBytes {
+    param($History)
+    $project = $History.project
+    $lines = [Collections.Generic.List[string]]::new()
+    foreach ($line in @(
+        "MyLiteratureVault - Projektbericht", "Projekt: $($project.name)", "Erstellt: $(Get-Date -Format 'yyyy-MM-dd HH:mm')", "", "Forschungsfrage: $($project.researchQuestion)", "Ziel: $($project.paperGoal)", "Hypothese: $($project.hypothesis)", "", "Aufgaben:")) { [void]$lines.Add((ConvertTo-PdfSafeText $line)) }
+    foreach ($task in @($project.todos)) { [void]$lines.Add((ConvertTo-PdfSafeText "# $($task.issueNumber) [$($task.status)] $($task.title)")) }
+    if (-not @($project.todos).Count) { [void]$lines.Add('Keine lokalen Aufgaben.') }
+    [void]$lines.Add(''); [void]$lines.Add('Git-Historie:')
+    $linked = @($History.linkedCommitHashes)
+    $reportCommits = if ($linked.Count) { @($History.commits | Where-Object { $linked -contains $_.hash }) } else { @($History.commits | Select-Object -First 40) }
+    foreach ($commit in $reportCommits) { [void]$lines.Add((ConvertTo-PdfSafeText "$($commit.short)  $($commit.subject)  [$($commit.author)]")) }
+    if (-not $reportCommits.Count) { [void]$lines.Add('Keine Commits zum Projekt zugeordnet.') }
+
+    $pageLines = @(); for ($index = 0; $index -lt $lines.Count; $index += 46) { $pageLines += ,@($lines[$index..([Math]::Min($index + 45, $lines.Count - 1))]) }
+    if (-not $pageLines.Count) { $pageLines = ,@('Projektbericht') }
+    $objects = [Collections.Generic.List[string]]::new()
+    [void]$objects.Add('<< /Type /Catalog /Pages 2 0 R >>')
+    $fontObject = 3 + ($pageLines.Count * 2)
+    $pageReferences = (@(for ($index = 0; $index -lt $pageLines.Count; $index++) { "$(3 + ($index * 2)) 0 R" }) -join ' ')
+    [void]$objects.Add("<< /Type /Pages /Kids [ $pageReferences ] /Count $($pageLines.Count) >>")
+    for ($index = 0; $index -lt $pageLines.Count; $index++) {
+        $pageObject = 3 + ($index * 2); $contentObject = $pageObject + 1
+        $contentLines = @('BT', '/F1 10 Tf', '50 790 Td', '14 TL') + @($pageLines[$index] | ForEach-Object { "($_) Tj"; 'T*' }) + @('ET')
+        $content = $contentLines -join "`n"
+        [void]$objects.Add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 $fontObject 0 R >> >> /Contents $contentObject 0 R >>")
+        [void]$objects.Add("<< /Length $([Text.Encoding]::ASCII.GetByteCount($content)) >>`nstream`n$content`nendstream")
+    }
+    [void]$objects.Add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
+    $stream = [IO.MemoryStream]::new(); $offsets = [Collections.Generic.List[long]]::new(); [void]$offsets.Add(0)
+    Write-PdfAscii $stream "%PDF-1.4`n"
+    for ($index = 0; $index -lt $objects.Count; $index++) { [void]$offsets.Add($stream.Position); Write-PdfAscii $stream "$(($index + 1)) 0 obj`n$($objects[$index])`nendobj`n" }
+    $xref = $stream.Position; Write-PdfAscii $stream "xref`n0 $($objects.Count + 1)`n0000000000 65535 f `n"
+    for ($index = 1; $index -lt $offsets.Count; $index++) { Write-PdfAscii $stream ("{0:D10} 00000 n `n" -f $offsets[$index]) }
+    Write-PdfAscii $stream "trailer`n<< /Size $($objects.Count + 1) /Root 1 0 R >>`nstartxref`n$xref`n%%EOF"
+    return $stream.ToArray()
 }
 
 function Handle-Api {
@@ -1296,6 +1434,27 @@ function Handle-Api {
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/research/saved-searches/([a-f0-9]{32})$" -and $method -eq "DELETE") {
             Send-Json $Context (Remove-ProjectResearchSearch $matches[1] $matches[2])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/history$" -and $method -eq "GET") {
+            Send-Json $Context (Get-ProjectHistoryPayload $matches[1])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/history/commits/([a-f0-9]{40})$" -and $method -in @("POST", "DELETE")) {
+            Send-Json $Context (Set-ProjectCommitLink $matches[1] $matches[2] ($method -eq "POST"))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/report$" -and $method -eq "GET") {
+            $history = Get-ProjectHistoryPayload $matches[1]
+            $format = "$($Context.Request.QueryString.Get('format'))".ToLowerInvariant()
+            $safeName = (($history.project.name -replace '[^a-zA-Z0-9_-]', '-') -replace '-+', '-').Trim('-')
+            if (-not $safeName) { $safeName = 'projektbericht' }
+            if ($format -eq 'pdf') {
+                Send-Bytes $Context (New-ProjectReportPdfBytes $history) 'application/pdf' "$safeName-projektbericht.pdf"
+            } else {
+                $html = ConvertTo-ProjectReportHtml $history
+                Send-Bytes $Context ([Text.Encoding]::UTF8.GetBytes($html)) 'text/html; charset=utf-8' "$safeName-projektbericht.html"
+            }
             return
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})$" -and $method -eq "GET") {

@@ -1,5 +1,10 @@
 # MyLiteratureVault
 
+![1792278621082](image/README/1792278621082.png)
+
+
+
+
 MyLiteratureVault verbindet Ihre Forschungsprojekte, Zotero und einen lokalen
 WebDAV-Speicher. Literatur, Quellen, Aufgaben und Projektordner bleiben dabei
 auf Ihrem Rechner bzw. in Ihrem bereits synchronisierten Cloud-Ordner – nicht
@@ -34,7 +39,7 @@ in GitHub und nicht in Git LFS.
 3. Beim ersten Start Cloud-Anbieter und den lokalen, synchronisierten Ordner
    eingeben. Den vorgeschlagenen Ordner können Sie mit Enter übernehmen.
 4. Warten, bis `Fertig! Alle Dienste laufen.` erscheint. Danach öffnet sich die
-   Oberfläche unter <http://localhost:8765>.
+   Oberfläche unter [http://localhost:8765](http://localhost:8765).
 
 Der erste Docker-Start darf etwas dauern: Das Skript wartet bis zu vier Minuten
 auf Docker Desktop und danach bis zu zwei Minuten auf WebDAV. Währenddessen ist
@@ -53,7 +58,6 @@ zeigt das Skript Status und letzte Container-Logs als Fehlerhilfe.
    Benutzer:  zotero
    Passwort:  siehe .env.local (beim ersten Start: changeme123)
    ```
-
 4. **Server prüfen** wählen.
 
 Die Datei `.env.local` enthält Ihre lokale Konfiguration und wird nicht in Git
@@ -73,7 +77,6 @@ erscheinen und Recherchetreffer importiert werden können.
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\build-zotero-plugin.ps1
    ```
-
 2. In Zotero **Extras → Erweiterungen → Zahnrad → Add-on aus Datei
    installieren…** wählen.
 3. `dist\myliteraturevault-zotero.xpi` auswählen und Zotero neu starten.
@@ -97,7 +100,6 @@ prüft beim Start und danach etwa alle 30 Sekunden, ob ein Abgleich ansteht.
        Literatur/
        Quellen/
    ```
-
 3. Fehlt die Sammlung, prüfen Sie, ob das Plugin aktiviert ist, starten Sie
    Zotero neu und führen Sie den Menüpunkt für den Projekt-Abgleich erneut aus.
 
@@ -218,13 +220,13 @@ Sammlungen geschieht bewusst nicht automatisch durch den Abgleich.
 
 ## Wenn etwas nicht funktioniert
 
-| Problem | Erste Lösung |
-| --- | --- |
-| `Container zotero-webdav Creating` | Warten, bis der Quickstart die WebDAV-Prüfung beendet. Bei Ablauf: Docker Desktop öffnen und `quickstart.bat` erneut starten. |
-| Oberfläche nicht erreichbar | `check-status.bat` ausführen; bei Bedarf `start-ui.bat` starten. |
-| Projekt erscheint nicht in Zotero | Plugin aktivieren, Zotero neu starten, dann **Ansicht → MyLiteratureVault-Projekte mit Zotero synchronisieren** ausführen. |
-| Treffer fehlen oder ein Provider meldet Fehler | Provider erneut versuchen oder andere Quelle aktivieren. Ergebnisse und Fehler eines Providers blockieren die übrigen nicht. |
-| Keine Anhänge in GitHub | Das ist korrekt: Anhänge und Forschungsdaten bleiben im externen Speicher. |
+| Problem                                        | Erste Lösung                                                                                                                      |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `Container zotero-webdav Creating`           | Warten, bis der Quickstart die WebDAV-Prüfung beendet. Bei Ablauf: Docker Desktop öffnen und `quickstart.bat` erneut starten.  |
+| Oberfläche nicht erreichbar                   | `check-status.bat` ausführen; bei Bedarf `start-ui.bat` starten.                                                              |
+| Projekt erscheint nicht in Zotero              | Plugin aktivieren, Zotero neu starten, dann **Ansicht → MyLiteratureVault-Projekte mit Zotero synchronisieren** ausführen. |
+| Treffer fehlen oder ein Provider meldet Fehler | Provider erneut versuchen oder andere Quelle aktivieren. Ergebnisse und Fehler eines Providers blockieren die übrigen nicht.      |
+| Keine Anhänge in GitHub                       | Das ist korrekt: Anhänge und Forschungsdaten bleiben im externen Speicher.                                                        |
 
 ## Nützliche Befehle
 
@@ -249,14 +251,14 @@ node .\tests\zotero-collection-move.tests.mjs
 
 ## Technischer Überblick
 
-| Bestandteil | Aufgabe |
-| --- | --- |
+| Bestandteil                             | Aufgabe                                                                          |
+| --------------------------------------- | -------------------------------------------------------------------------------- |
 | `quickstart.ps1` / `quickstart.bat` | Richtet die lokale Konfiguration ein und startet Docker, WebDAV, UI und Monitor. |
-| `docker-compose.yml` | Bindet den externen Speicher als WebDAV-Volume ein. |
-| `vault-ui.ps1` und `ui/` | Lokaler Server, Forschungsprojekt-UI und APIs. |
-| `search/` | Suchdienst mit getrennten Adaptermodulen für die Provider. |
-| `zotero-plugin/` | Quellcode der Zotero-Erweiterung. |
-| `build-zotero-plugin.ps1` | Erzeugt `dist/myliteraturevault-zotero.xpi`. |
+| `docker-compose.yml`                  | Bindet den externen Speicher als WebDAV-Volume ein.                              |
+| `vault-ui.ps1` und `ui/`            | Lokaler Server, Forschungsprojekt-UI und APIs.                                   |
+| `search/`                             | Suchdienst mit getrennten Adaptermodulen für die Provider.                      |
+| `zotero-plugin/`                      | Quellcode der Zotero-Erweiterung.                                                |
+| `build-zotero-plugin.ps1`             | Erzeugt `dist/myliteraturevault-zotero.xpi`.                                   |
 
 Weitere technische Details für die Erweiterung stehen in
 [zotero-plugin/README.md](zotero-plugin/README.md).

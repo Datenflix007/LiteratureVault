@@ -19,7 +19,11 @@ const state = {
   researchResultFilters: { global: { title: '', author: '', fromYear: '', toYear: '', provider: '', classification: '', sort: 'relevance' }, project: { title: '', author: '', fromYear: '', toYear: '', provider: '', classification: '', sort: 'relevance' } },
   savedResearchResults: [],
   savedTargetProjectId: localStorage.getItem("myliteraturevault.savedTargetProjectId") || "",
-  savedResearchSearches: []
+  savedResearchSearches: [],
+  projectHistory: {},
+  projectHistoryLoading: {},
+  historyScope: {},
+  historySelectedCommit: {}
 };
 
 const $ = (id) => document.getElementById(id);
@@ -521,6 +525,100 @@ function researchConceptEditor(project) {
   return '<section class="concept-editor panel-card"><header><div><p class="eyebrow">FORSCHUNGSKONZEPT</p><h3>Frage präzisieren</h3><p class="hint">Änderungen werden lokal automatisch gespeichert.</p></div><span id="conceptSaveState" class="autosave-state">Gespeichert</span></header><div class="concept-fields">' + fields.map(([field, label]) => '<label><span>' + label + '</span><textarea rows="2" data-concept-field="' + field + '" placeholder="' + label + ' formulieren …">' + esc(concept[field] || "") + '</textarea></label>').join("") + '</div></section>';
 }
 
+async function loadProjectHistory(project, force = false) {
+  if (!project || (!force && (state.projectHistory[project.id] || state.projectHistoryLoading[project.id]))) return;
+  state.projectHistoryLoading[project.id] = true;
+  renderWorkspace();
+  try {
+    state.projectHistory[project.id] = await api('/api/projects/' + project.id + '/history');
+  } finally {
+    delete state.projectHistoryLoading[project.id];
+    if (projectById(project.id)) renderWorkspace();
+  }
+}
+
+function historyLayout(commits) {
+  const lanes = [];
+  return commits.map((commit, row) => {
+    let lane = lanes.indexOf(commit.hash);
+    if (lane < 0) { lane = lanes.length; lanes.push(commit.hash); }
+    const node = { ...commit, lane, row };
+    const parents = Array.isArray(commit.parents) ? commit.parents.filter(Boolean) : [];
+    if (parents.length) {
+      lanes[lane] = parents[0];
+      if (parents.length > 1) lanes.splice(lane + 1, 0, ...parents.slice(1));
+    } else {
+      lanes.splice(lane, 1);
+    }
+    return node;
+  });
+}
+
+function projectHistoryPanel(project) {
+  const history = state.projectHistory[project.id];
+  const loading = state.projectHistoryLoading[project.id];
+  if (!history) {
+    if (!loading) void loadProjectHistory(project);
+    return '<section class="project-history panel-card"><header><div><p class="eyebrow">CODE-HISTORIE</p><h3>Projektverlauf</h3><p class="hint">Git-Graph wird lokal geladen.</p></div></header><div class="history-empty">Historie wird geladen ...</div></section>';
+  }
+  const linked = new Set(history.linkedCommitHashes || []);
+  const scope = state.historyScope[project.id] || 'all';
+  const nodes = historyLayout(history.commits || []);
+  const visible = scope === 'linked' ? nodes.filter((node) => linked.has(node.hash)) : nodes;
+  const nodeByHash = new Map(visible.map((node) => [node.hash, node]));
+  const selectedHash = state.historySelectedCommit[project.id] && nodeByHash.has(state.historySelectedCommit[project.id])
+    ? state.historySelectedCommit[project.id]
+    : (visible[0] || {}).hash;
+  const selected = nodeByHash.get(selectedHash);
+  const laneWidth = 42;
+  const rowHeight = 54;
+  const maxLane = Math.max(0, ...visible.map((node) => node.lane));
+  const graphWidth = Math.max(590, (maxLane + 1) * laneWidth + 470);
+  const graphHeight = Math.max(96, visible.length * rowHeight + 24);
+  const edges = visible.flatMap((node) => (node.parents || []).map((parentHash) => {
+    const parent = nodeByHash.get(parentHash);
+    if (!parent) return '';
+    const x1 = 28 + node.lane * laneWidth;
+    const y1 = 27 + node.row * rowHeight;
+    const x2 = 28 + parent.lane * laneWidth;
+    const y2 = 27 + parent.row * rowHeight;
+    const bend = Math.max(x1, x2) + 16;
+    return '<path d="M ' + x1 + ' ' + y1 + ' C ' + bend + ' ' + y1 + ', ' + bend + ' ' + y2 + ', ' + x2 + ' ' + y2 + '" />';
+  })).join('');
+  const nodeButtons = visible.map((node) => {
+    const refs = (node.refs || []).map((ref) => '<span class="history-ref">' + esc(ref) + '</span>').join('');
+    const classes = ['history-node', linked.has(node.hash) ? 'linked' : '', (node.parents || []).length > 1 ? 'merge' : '', node.hash === selectedHash ? 'selected' : ''].filter(Boolean).join(' ');
+    return '<button type="button" class="' + classes + '" data-history-commit="' + esc(node.hash) + '" style="--history-x:' + (28 + node.lane * laneWidth) + 'px;--history-y:' + (27 + node.row * rowHeight) + 'px" title="' + esc(node.hash) + '"><span class="history-node-dot"></span><span class="history-node-copy"><strong>' + esc(node.subject || '(ohne Nachricht)') + '</strong><small>' + esc(node.short) + ' · ' + esc(node.author || '') + ' · ' + esc(formatDate(node.date)) + '</small></span>' + (refs ? '<span class="history-refs">' + refs + '</span>' : '') + '</button>';
+  }).join('');
+  const linkedLabel = linked.size ? linked.size + ' zugeordnet' : 'keine Zuordnung';
+  const graph = visible.length
+    ? '<div class="history-graph-scroll"><div class="history-canvas" style="width:' + graphWidth + 'px;height:' + graphHeight + 'px"><svg class="history-edges" viewBox="0 0 ' + graphWidth + ' ' + graphHeight + '" width="' + graphWidth + '" height="' + graphHeight + '" aria-hidden="true">' + edges + '</svg>' + nodeButtons + '</div></div>'
+    : '<div class="history-empty">Diesem Projekt sind noch keine Commits zugeordnet.</div>';
+  const detail = selected
+    ? '<aside class="history-detail"><div><p class="eyebrow">AUSGEWAEHLTER COMMIT</p><h4>' + esc(selected.subject || '(ohne Nachricht)') + '</h4><p><code>' + esc(selected.hash) + '</code></p><p class="hint">' + esc(selected.author || 'Unbekannt') + ' · ' + esc(selected.email || '') + '<br>' + esc(formatDate(selected.date)) + '</p></div><div class="history-detail-actions"><button type="button" class="' + (linked.has(selected.hash) ? 'secondary-btn' : 'primary-btn') + ' compact" data-history-link="' + esc(selected.hash) + '" data-history-linked="' + (linked.has(selected.hash) ? 'true' : 'false') + '">' + (linked.has(selected.hash) ? 'Zuordnung entfernen' : 'Diesem Projekt zuordnen') + '</button></div></aside>'
+    : '';
+  return '<section class="project-history panel-card"><header><div><p class="eyebrow">CODE-HISTORIE</p><h3>Projektverlauf</h3><p class="hint">Jeder Commit ist ein Knoten; Verzweigungen und Merge-Commit-Eltern bleiben sichtbar.</p></div><div class="history-header-actions"><button type="button" class="quiet-btn" data-history-refresh>Aktualisieren</button><button type="button" class="secondary-btn compact" data-export-project-report="html">HTML-Bericht</button><button type="button" class="primary-btn compact" data-export-project-report="pdf">PDF-Bericht</button></div></header><div class="history-summary"><span><strong>' + (history.commits || []).length + '</strong> Commits</span><span><strong>' + (history.branchCount || 0) + '</strong> Referenzen</span><span><strong>' + (history.mergeCount || 0) + '</strong> Merges</span><span>' + esc(linkedLabel) + '</span><div class="history-scope" role="group" aria-label="Commit-Auswahl"><button type="button" class="' + (scope === 'all' ? 'active' : '') + '" data-history-scope="all">Alle</button><button type="button" class="' + (scope === 'linked' ? 'active' : '') + '" data-history-scope="linked">Nur Projekt</button></div></div><div class="history-content">' + graph + detail + '</div></section>';
+}
+
+async function downloadProjectReport(projectId, format) {
+  const response = await fetch(API_BASE + '/api/projects/' + projectId + '/report?format=' + encodeURIComponent(format));
+  if (!response.ok) {
+    let message = 'Bericht konnte nicht exportiert werden.';
+    try { message = (await response.json()).error || message; } catch (_) { /* non-JSON error */ }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const anchor = document.createElement('a');
+  anchor.href = URL.createObjectURL(blob);
+  anchor.download = match ? match[1] : 'projektbericht.' + (format === 'pdf' ? 'pdf' : 'html');
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
+}
+
 function renderWorkspace() {
   const project = projectById();
   $("workspaceContent").hidden = !project;
@@ -548,6 +646,7 @@ function renderWorkspace() {
     researchQuestionCard +
     '<div class="workspace-metrics compact-metrics"><article><span>Aufgaben</span><strong>' + (project.todoCount || 0) + '</strong><p>' + (project.inProgressTodoCount || 0) + ' in Arbeit · ' + (project.doneTodoCount || 0) + ' erledigt</p></article><article><span>Literatur</span><strong>' + literatureCount + '</strong><p>aus der Zotero-Projektsammlung</p></article><article><span>Quellen</span><strong>' + sourceCount + '</strong><p>aus der Zotero-Projektsammlung</p></article><article><span>Termin</span><strong class="date-metric">' + esc(project.deadline ? formatDate(project.deadline) : "—") + '</strong><p>Projektbrief</p></article></div>' +
     researchConceptEditor(project) +
+    projectHistoryPanel(project) +
     projectResearchPanel(project) +
     '<section class="tasks-panel panel-card"><header><div><p class="eyebrow">LOKALE ISSUES</p><h3>Aufgaben</h3><p class="hint">Jede Aufgabe hat eine lokale Issue-Nummer, Verlauf, Kommentare und Checkliste.</p></div><button type="button" class="primary-btn compact" data-new-task>+ Aufgabe</button></header><div class="task-board">' +
       taskColumn(project, references, "open", "Offen", "Nächster sinnvoller Schritt") + taskColumn(project, references, "in_progress", "In Arbeit", "Gerade im Fokus") + taskColumn(project, references, "blocked", "Blockiert", "Benötigt eine Klärung") + taskColumn(project, references, "done", "Erledigt", "Dokumentierter Fortschritt") +
@@ -1058,6 +1157,15 @@ document.addEventListener("click", (event) => {
   const permanentDeleteButton = event.target.closest("[data-permanent-delete-project]");
   if (permanentDeleteButton) return openDeleteProjectDialog(permanentDeleteButton.dataset.permanentDeleteProject, true);
   if (event.target.closest("[data-new-task]")) return openTaskDialog();
+  const historyCommit = event.target.closest('[data-history-commit]');
+  if (historyCommit) { const project = projectById(); if (project) { state.historySelectedCommit[project.id] = historyCommit.dataset.historyCommit; renderWorkspace(); } return; }
+  const historyScope = event.target.closest('[data-history-scope]');
+  if (historyScope) { const project = projectById(); if (project) { state.historyScope[project.id] = historyScope.dataset.historyScope; renderWorkspace(); } return; }
+  if (event.target.closest('[data-history-refresh]')) { const project = projectById(); if (project) return loadProjectHistory(project, true).catch((error) => toast(error.message, 'error')); }
+  const historyLink = event.target.closest('[data-history-link]');
+  if (historyLink) { const project = projectById(); if (project) { const linked = historyLink.dataset.historyLinked === 'true'; return api('/api/projects/' + project.id + '/history/commits/' + historyLink.dataset.historyLink, { method: linked ? 'DELETE' : 'POST', body: '{}' }).then(async (result) => { state.projectHistory[project.id] = result; await loadProjects(); toast(linked ? 'Commit-Zuordnung entfernt.' : 'Commit dem Projekt zugeordnet.'); }).catch((error) => toast(error.message, 'error')); } return; }
+  const reportExport = event.target.closest('[data-export-project-report]');
+  if (reportExport) { const project = projectById(); if (project) return downloadProjectReport(project.id, reportExport.dataset.exportProjectReport).then(() => toast('Projektbericht wird heruntergeladen.')).catch((error) => toast(error.message, 'error')); }
   const editTaskButton = event.target.closest("[data-edit-task]");
   if (editTaskButton) {
     const task = (projectById()?.tasks || projectById()?.todos || []).find((item) => item.id === editTaskButton.dataset.editTask);
