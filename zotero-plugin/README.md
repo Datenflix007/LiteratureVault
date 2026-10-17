@@ -34,7 +34,7 @@ View -> MyLiteratureVault oeffnen
 Projekt-Sammlungen erscheinen unter:
 
 ```text
-Projekte · MyLiteratureVault
+Meine Bibliothek
   Projektname
     Literatur
     Quellen

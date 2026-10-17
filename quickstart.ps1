@@ -315,6 +315,20 @@ function Test-WebDavReady {
     }
 }
 
+function Get-WebDavContainerState {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        $stateOutput = & docker inspect --format "{{.State.Status}}" zotero-webdav 2>$null | Select-Object -First 1
+        $state = ([string]$stateOutput).Trim()
+        if ($LASTEXITCODE -eq 0) { return $state }
+        return "nicht vorhanden"
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
 function Start-WebDav {
     Write-Step "[6/7] WebDAV Container starten"
 
@@ -338,24 +352,34 @@ function Start-WebDav {
     Write-Info "Starte WebDAV Container..."
     $upOut = docker compose up -d 2>&1
     if ($LASTEXITCODE -ne 0) {
-        $upOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-        docker compose logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-        throw "WebDAV Container konnte nicht gestartet werden."
+        $containerState = Get-WebDavContainerState
+        if ($containerState -notin @("created", "running", "restarting")) {
+            $upOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            docker compose logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+            throw "WebDAV Container konnte nicht gestartet werden."
+        }
+        Write-Warn "Docker erstellt den Container noch (Status: $containerState). Warte auf WebDAV..."
     }
 
     Write-Host "Warte auf WebDAV" -NoNewline
-    $deadline = (Get-Date).AddSeconds(30)
+    $deadline = (Get-Date).AddMinutes(2)
     while ((Get-Date) -lt $deadline) {
-        if (Test-WebDavReady) { Write-Host " OK"; break }
+        if (Test-WebDavReady) {
+            Write-Host " OK"
+            Write-Ok "WebDAV laeuft auf http://localhost:8080"
+            return
+        }
         Start-Sleep -Seconds 2
         Write-Host "." -NoNewline
     }
     Write-Host ""
 
+    $containerState = Get-WebDavContainerState
     $fmt = "  {{.Names}} | {{.Status}} | {{.Ports}}"
     docker ps --filter "name=zotero-webdav" --format $fmt 2>&1 |
         Where-Object { $_ } | ForEach-Object { Write-Info $_ }
-    Write-Ok "WebDAV laeuft auf http://localhost:8080"
+    docker compose logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    throw "WebDAV war nach 2 Minuten nicht bereit (Container-Status: $containerState)."
 }
 
 # ----------- Auto-Sync -----------------------------------------------

@@ -247,7 +247,7 @@ async function createProject(event) {
   setSelectedProject(project.id);
   await loadProjects();
   setView("workspace");
-  toast("Projekt, Cloud-Ordner und Zotero-Sammlungsvorlage wurden angelegt.");
+  toast("Projekt und Cloud-Ordner wurden angelegt. Zotero erstellt beim nächsten Abgleich die Sammlung unter Meine Bibliothek.");
 }
 
 function openProjectDialog() {

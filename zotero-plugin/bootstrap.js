@@ -1,7 +1,6 @@
 var MyLiteratureVault;
 
 const PROJECTS_API_URL = "http://localhost:8765/api/projects";
-const PROJECTS_ROOT_NAME = "Projekte · MyLiteratureVault";
 
 function log(message) {
   Zotero.debug("MyLiteratureVault: " + message);
@@ -42,16 +41,15 @@ async function getOrCreateCollection(libraryID, parentCollection, name) {
 
 async function ensureProjectCollections(projects) {
   const libraryID = Zotero.Libraries.userLibraryID;
-  const root = await getOrCreateCollection(libraryID, null, PROJECTS_ROOT_NAME);
   let created = 0;
   let linkedItems = 0;
   let missingItems = 0;
 
   for (const project of projects) {
     const projectName = getProjectCollectionName(project, projects);
-    const beforeProject = root.getChildCollections(false)
+    const beforeProject = Zotero.Collections.getByLibrary(libraryID, false)
       .find((collection) => collection.name === projectName);
-    const projectCollection = await getOrCreateCollection(libraryID, root, projectName);
+    const projectCollection = await getOrCreateCollection(libraryID, null, projectName);
     if (!beforeProject) {
       created++;
     }

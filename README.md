@@ -44,7 +44,7 @@ TODOs gehören immer zu genau einem Projekt. Sie werden gemeinsam mit den Projek
 
 Das mitgelieferte Zotero-Plugin erstellt zusätzlich echte Sammlungen in Ihrer Zotero-Bibliothek:
 
-    Projekte · MyLiteratureVault/
+    Meine Bibliothek/
       Mein Projekt/
         Literatur/
         Quellen/
