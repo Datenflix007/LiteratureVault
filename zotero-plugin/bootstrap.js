@@ -174,6 +174,7 @@ async function ensureProjectCollections(projects) {
         continue;
       }
       const target = reference.kind === "source" ? children.Quellen : children.Literatur;
+      const otherTarget = reference.kind === "source" ? children.Literatur : children.Quellen;
       const item = Zotero.Items.getByLibraryAndKey(libraryID, key);
       if (!item) {
         missingItems++;
@@ -186,6 +187,15 @@ async function ensureProjectCollections(projects) {
           await target.addItem(item.id);
         });
         linkedItems++;
+      }
+      // A project reference belongs to exactly one project child collection.
+      // Removing it here only changes collection membership: the item, its
+      // attachments and all metadata remain untouched in the Zotero library.
+      const otherItemIDs = new Set(otherTarget.getChildItems(true));
+      if (otherItemIDs.has(item.id)) {
+        await Zotero.DB.executeTransaction(async () => {
+          await otherTarget.removeItem(item.id);
+        });
       }
     }
 

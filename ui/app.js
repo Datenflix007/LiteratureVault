@@ -16,7 +16,7 @@ const state = {
   researchResults: { global: null, project: null },
   researchRequests: { global: null, project: null },
   researchLoadingMore: { global: false, project: false },
-  researchResultFilters: { global: { title: '', author: '', fromYear: '', toYear: '', provider: '', sort: 'relevance' }, project: { title: '', author: '', fromYear: '', toYear: '', provider: '', sort: 'relevance' } },
+  researchResultFilters: { global: { title: '', author: '', fromYear: '', toYear: '', provider: '', classification: '', sort: 'relevance' }, project: { title: '', author: '', fromYear: '', toYear: '', provider: '', classification: '', sort: 'relevance' } },
   savedResearchResults: [],
   savedTargetProjectId: localStorage.getItem("myliteraturevault.savedTargetProjectId") || "",
   savedResearchSearches: []
@@ -216,19 +216,31 @@ function providerMark(provider) {
 
 function researchResultCard(result, scope) {
   const authors = (result.authors || []).join(", ");
-  const relevance = result.relevance ? '<span class="relevance-score">Relevanzscore: ' + esc(result.relevance.score) + '/100</span>' : '';
+  const score = Number(result.relevance?.score || 0);
+  const relevance = result.relevance
+    ? '<div class="relevance-summary"><span class="relevance-score">Relevanz ' + esc(score) + '/100</span><span class="relevance-bar" role="img" aria-label="Relevanz ' + esc(score) + ' von 100"><i style="width:' + Math.max(0, Math.min(100, score)) + '%"></i></span></div>'
+    : '';
   const urls = result.fulltextUrl || result.sourceUrl;
   const provider = (result.providers || [result.provider]).join(" · ");
-  const details = result.relevance ? '<p class="hint">' + esc(result.relevance.label) + ' · ' + esc((result.relevance.matchedTerms || []).join(", ") || "keine direkten Begriffstreffer") + '<br>' + esc(result.relevance.explanation) + '</p>' : '';
+  const relevanceDetails = result.relevance
+    ? '<details class="relevance-explanation"><summary>' + esc(result.relevance.label) + ' · Begründung</summary><p class="hint">' + esc(result.relevance.explanation) + '</p><ul>' + (result.relevance.fields || []).map((field) => '<li><strong>' + esc(field.label) + ' (' + esc(field.weight) + ' %):</strong> ' + esc((field.matches || []).join(', ') || 'keine direkten Begriffstreffer') + (field.overlap !== undefined ? ' <span>' + esc(field.overlap) + ' % Feldübereinstimmung</span>' : '') + '</li>').join('') + '</ul>' + ((result.relevance.missingFields || []).length ? '<p class="hint">Nicht vorhanden: ' + esc((result.relevance.missingFields || []).map((field) => ({ title: 'Titel', abstract: 'Abstract', keywords: 'Schlagwörter', subject: 'Projektkontext' }[field] || field)).join(', ')) + '.</p>' : '') + '</details>'
+    : '';
+  const classification = result.classification;
+  const classificationLabel = { source: 'Primärquelle', literature: 'Sekundärliteratur', unclear: 'Unklar' }[classification?.category] || 'Unklar';
+  const classificationTag = classification ? '<span class="classification-tag ' + esc(classification.category) + '" title="' + esc(classification.reason || '') + '">' + esc(classificationLabel) + (classification.origin === 'manual' ? ' · manuell' : classification.confidence === 'low' ? ' · unsicher' : '') + '</span>' : '';
+  const classificationInfo = classification ? '<p class="classification-reason">' + esc(classification.reason || '') + (classification.signals?.length ? ' ' + esc(classification.signals.join(' ')) : '') + '</p>' : '';
   const bookmarked = state.savedResearchResults.some((entry) => entry.resultId === result.resultId);
   const bookmark = '<button type="button" class="bookmark-button' + (bookmarked ? ' saved' : '') + '" data-toggle-saved-research="' + esc(result.resultId) + '" aria-pressed="' + bookmarked + '" title="' + (bookmarked ? 'Aus Merkliste entfernen' : 'In Merkliste speichern') + '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 3.75h10.5v16.5L12 17.1l-5.25 3.15z"/></svg><span class="sr-only">' + (bookmarked ? 'Aus Merkliste entfernen' : 'In Merkliste speichern') + '</span></button>';
   const importAction = scope === 'project'
-    ? '<button type="button" class="primary-btn" data-import-zotero="' + esc(result.resultId) + '" data-import-kind="literature">Zu Zotero</button>'
+    ? '<button type="button" class="primary-btn" data-import-zotero="' + esc(result.resultId) + '" data-import-kind="' + esc(classification?.category === 'source' ? 'source' : 'literature') + '">Zu Zotero</button>'
     : scope === 'saved' && state.projects.length
       ? '<button type="button" class="secondary-btn" data-import-saved-zotero="' + esc(result.resultId) + '" data-import-kind="source">Quelle → Zotero</button><button type="button" class="primary-btn" data-import-saved-zotero="' + esc(result.resultId) + '" data-import-kind="literature">Literatur → Zotero</button>'
       : '';
+  const manualActions = scope === 'project'
+    ? '<div class="classification-actions" aria-label="Manuelle Zuordnung"><span>Zuordnen:</span><button type="button" class="quiet-btn" data-set-research-classification="' + esc(result.resultId) + '" data-classification-category="source">Quelle</button><button type="button" class="quiet-btn" data-set-research-classification="' + esc(result.resultId) + '" data-classification-category="literature">Literatur</button></div>'
+    : '';
   const actions = '<div class="research-result-actions">' + bookmark + '<button type="button" class="secondary-btn" data-research-detail="' + esc(result.resultId) + '">Infos</button>' + (urls ? '<a class="secondary-btn" href="' + esc(urls) + '" target="_blank" rel="noreferrer">Original ↗</a>' : '') + importAction + '</div>';
-  return '<article class="research-result">' + providerMark(result.provider) + '<div class="research-result-main"><span class="source-key">' + esc(provider) + '</span>' + relevance + '<h3>' + esc(result.title) + '</h3><p>' + esc([authors, result.publicationYear, result.publicationType].filter(Boolean).join(" · ")) + '</p>' + details + '</div>' + actions + '</article>';
+  return '<article class="research-result">' + providerMark(result.provider) + '<div class="research-result-main"><span class="source-key">' + esc(provider) + '</span>' + relevance + classificationTag + '<h3>' + esc(result.title) + '</h3><p>' + esc([authors, result.publicationYear, result.publicationType].filter(Boolean).join(" · ")) + '</p>' + classificationInfo + relevanceDetails + manualActions + '</div>' + actions + '</article>';
 }
 
 function normalizedResearchText(value) {
@@ -240,6 +252,7 @@ function filteredResearchResults(scope, results) {
   const titleNeedle = normalizedResearchText(filters.title);
   const authorNeedle = normalizedResearchText(filters.author);
   const provider = String(filters.provider || '').toLowerCase();
+  const classification = String(filters.classification || '');
   const fromYear = Number(filters.fromYear || 0);
   const toYear = Number(filters.toYear || 0);
   const visible = (results || []).filter((result) => {
@@ -248,6 +261,7 @@ function filteredResearchResults(scope, results) {
     return (!titleNeedle || normalizedResearchText(result.title).includes(titleNeedle))
       && (!authorNeedle || normalizedResearchText((result.authors || []).join(' ')).includes(authorNeedle))
       && (!provider || providers.includes(provider))
+      && (!classification || String(result.classification?.category || 'unclear') === classification)
       && (!fromYear || (year && year >= fromYear))
       && (!toYear || (year && year <= toYear));
   });
@@ -266,7 +280,22 @@ function researchResultFilterControls(scope, results) {
   const filters = state.researchResultFilters[scope];
   const providers = [...new Set((results || []).flatMap((result) => result.providers || [result.provider]).filter(Boolean))].sort((left, right) => String(left).localeCompare(String(right), 'de-DE'));
   const bind = (name) => 'data-research-result-filter="' + scope + '" name="' + name + '"';
-  return '<div class="research-result-filters" aria-label="Trefferliste filtern"><label>Titel<input ' + bind('title') + ' value="' + esc(filters.title) + '" placeholder="Titel filtern …"></label><label>Autor:in<input ' + bind('author') + ' value="' + esc(filters.author) + '" placeholder="Name suchen …"></label><label>Jahr ab<input ' + bind('fromYear') + ' type="number" min="1000" max="2999" value="' + esc(filters.fromYear) + '" placeholder="z. B. 1900"></label><label>bis<input ' + bind('toYear') + ' type="number" min="1000" max="2999" value="' + esc(filters.toYear) + '" placeholder="z. B. 2026"></label><label>Provider<select ' + bind('provider') + '><option value="">Alle Quellen</option>' + providers.map((entry) => '<option value="' + esc(entry) + '"' + (String(filters.provider) === String(entry) ? ' selected' : '') + '>' + esc(entry) + '</option>').join('') + '</select></label><label>Sortieren<select ' + bind('sort') + '><option value="relevance"' + (filters.sort === 'relevance' ? ' selected' : '') + '>Quellenreihenfolge</option><option value="title"' + (filters.sort === 'title' ? ' selected' : '') + '>Titel A–Z</option><option value="author"' + (filters.sort === 'author' ? ' selected' : '') + '>Autor:in A–Z</option><option value="year-desc"' + (filters.sort === 'year-desc' ? ' selected' : '') + '>Jahr absteigend</option><option value="year-asc"' + (filters.sort === 'year-asc' ? ' selected' : '') + '>Jahr aufsteigend</option><option value="provider"' + (filters.sort === 'provider' ? ' selected' : '') + '>Provider A–Z</option></select></label><button type="button" class="quiet-btn" data-clear-research-result-filters="' + scope + '">Filter zurücksetzen</button></div>';
+  const classificationFilter = scope === 'project' ? '<label>Bereich<select ' + bind('classification') + '><option value="">Alle Bereiche</option><option value="source"' + (filters.classification === 'source' ? ' selected' : '') + '>Quellen</option><option value="literature"' + (filters.classification === 'literature' ? ' selected' : '') + '>Literatur</option><option value="unclear"' + (filters.classification === 'unclear' ? ' selected' : '') + '>Unklar</option></select></label>' : '';
+  return '<div class="research-result-filters" aria-label="Trefferliste filtern"><label>Titel<input ' + bind('title') + ' value="' + esc(filters.title) + '" placeholder="Titel filtern …"></label><label>Autor:in<input ' + bind('author') + ' value="' + esc(filters.author) + '" placeholder="Name suchen …"></label><label>Jahr ab<input ' + bind('fromYear') + ' type="number" min="1000" max="2999" value="' + esc(filters.fromYear) + '" placeholder="z. B. 1900"></label><label>bis<input ' + bind('toYear') + ' type="number" min="1000" max="2999" value="' + esc(filters.toYear) + '" placeholder="z. B. 2026"></label><label>Provider<select ' + bind('provider') + '><option value="">Alle Quellen</option>' + providers.map((entry) => '<option value="' + esc(entry) + '"' + (String(filters.provider) === String(entry) ? ' selected' : '') + '>' + esc(entry) + '</option>').join('') + '</select></label>' + classificationFilter + '<label>Sortieren<select ' + bind('sort') + '><option value="relevance"' + (filters.sort === 'relevance' ? ' selected' : '') + '>Relevanz 0–100</option><option value="title"' + (filters.sort === 'title' ? ' selected' : '') + '>Titel A–Z</option><option value="author"' + (filters.sort === 'author' ? ' selected' : '') + '>Autor:in A–Z</option><option value="year-desc"' + (filters.sort === 'year-desc' ? ' selected' : '') + '>Jahr absteigend</option><option value="year-asc"' + (filters.sort === 'year-asc' ? ' selected' : '') + '>Jahr aufsteigend</option><option value="provider"' + (filters.sort === 'provider' ? ' selected' : '') + '>Provider A–Z</option></select></label><button type="button" class="quiet-btn" data-clear-research-result-filters="' + scope + '">Filter zurücksetzen</button></div>';
+}
+
+function classifiedResearchResultList(scope, results) {
+  if (scope !== 'project') return results.map((result) => researchResultCard(result, scope)).join('');
+  const groups = [
+    ['source', 'Quellen', 'Primärquellen und historische Dokumente'],
+    ['literature', 'Literatur', 'Sekundärliteratur und Forschung'],
+    ['unclear', 'Unklar', 'Für diese Treffer reichen die Metadaten nicht für eine sichere Zuordnung']
+  ];
+  return groups.map(([category, title, hint]) => {
+    const entries = results.filter((result) => String(result.classification?.category || 'unclear') === category);
+    if (!entries.length) return '';
+    return '<section class="research-classification-group ' + category + '"><header><div><h3>' + title + '</h3><p>' + hint + '</p></div><span>' + entries.length + '</span></header>' + entries.map((result) => researchResultCard(result, scope)).join('') + '</section>';
+  }).join('');
 }
 
 function renderResearch(scope, response) {
@@ -287,7 +316,7 @@ function renderResearch(scope, response) {
   const more = response.hasMore
     ? '<div class="research-more"><p class="hint">Die Datenbanken melden weitere Treffer. Die Liste wird seitenweise erweitert.</p><button type="button" class="secondary-btn" data-load-more-research="' + esc(scope) + '"' + (state.researchLoadingMore[scope] ? ' disabled' : '') + '>' + (state.researchLoadingMore[scope] ? 'Weitere Treffer werden geladen …' : 'Weitere Treffer laden') + '</button></div>'
     : '<p class="hint research-end">Alle von den aktivierten Datenbanken erreichbaren Trefferseiten wurden geladen.</p>';
-  target.innerHTML = researchResultFilterControls(scope, response.results || []) + errors + (visibleResults.length ? visibleResults.map((result) => researchResultCard(result, scope)).join("") : '<p class="empty-mini">Keine Treffer mit den gewählten Filtern.</p>') + more;
+  target.innerHTML = researchResultFilterControls(scope, response.results || []) + errors + (visibleResults.length ? classifiedResearchResultList(scope, visibleResults) : '<p class="empty-mini">Keine Treffer mit den gewählten Filtern.</p>') + more;
 }
 
 function researchResultById(resultId) {
@@ -346,7 +375,7 @@ function openResearchDetail(resultId) {
   const result = researchResultById(resultId);
   if (!result) return;
   const meta = [
-    ['Autor:innen', (result.authors || []).join('; ')], ['Erscheinungsjahr', result.publicationYear], ['Typ', result.publicationType], ['Quelle', (result.providers || [result.provider]).join(', ')], ['DOI', result.doi], ['ISBN', (result.isbn || []).join(', ')], ['ISSN', (result.issn || []).join(', ')], ['Sprache', result.language], ['Verlag / Journal', result.publisher], ['Bestand / Verfügbarkeit', result.availability], ['Open Access', result.openAccessStatus]
+    ['Autor:innen', (result.authors || []).join('; ')], ['Erscheinungsjahr', result.publicationYear], ['Entstehungsjahr des Dokuments', result.sourceYear || result.sourceDate], ['Typ', result.publicationType], ['Einordnung', result.classification ? ({ source: 'Primärquelle', literature: 'Sekundärliteratur', unclear: 'Unklar' }[result.classification.category] || 'Unklar') + (result.classification.origin === 'manual' ? ' (manuell)' : '') : ''], ['Quelle', (result.providers || [result.provider]).join(', ')], ['DOI', result.doi], ['ISBN', (result.isbn || []).join(', ')], ['ISSN', (result.issn || []).join(', ')], ['Sprache', result.language], ['Verlag / Journal', result.publisher], ['Bestand / Verfügbarkeit', result.availability], ['Open Access', result.openAccessStatus]
   ].filter(([, value]) => value);
   $('researchDetailTitle').textContent = result.title;
   $('researchDetailBody').innerHTML = '<dl class="metadata-list">' + meta.map(([label, value]) => '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>').join('') + '</dl>' + (result.abstract ? '<section><h3>Abstract</h3><p>' + nl(result.abstract) + '</p></section>' : '') + (result.keywords?.length ? '<section><h3>Schlagwörter</h3><p>' + esc(result.keywords.join(', ')) + '</p></section>' : '');
@@ -364,10 +393,26 @@ async function importResearchResultToZotero(resultId, kind) {
   await api('/api/projects/' + project.id + '/zotero-collection/request', { method: 'POST', body: '{}' });
 }
 
+async function setResearchClassification(resultId, category) {
+  const project = projectById();
+  if (!project) throw new Error('Bitte öffne zuerst ein Forschungsprojekt.');
+  await api('/api/projects/' + project.id + '/research/classifications/' + encodeURIComponent(resultId), { method: 'PATCH', body: JSON.stringify({ category }) });
+  const response = state.researchResults.project;
+  const result = response?.results?.find((entry) => entry.resultId === resultId);
+  if (result) {
+    result.classification = { ...(result.classification || {}), category, origin: 'manual', confidence: 'manual', reason: 'Manuell für dieses Projekt zugeordnet.', signals: ['Manuelle Entscheidung hat Vorrang.'] };
+  }
+  await api('/api/projects/' + project.id + '/zotero-collection/request', { method: 'POST', body: '{}' });
+  await loadProjects();
+  renderResearch('project', state.researchResults.project);
+  toast('Manuelle Zuordnung gespeichert. Bestehende Zotero-Verknüpfungen werden beim nächsten Plugin-Abgleich verschoben.');
+}
+
 function projectResearchPanel(project) {
   const saved = state.savedResearchSearches || project.savedResearchSearches || [];
   const weights = project.researchSettings?.weights || { title: 30, abstract: 40, keywords: 20, subject: 10 };
-  return '<section class="research-panel panel-card"><header><div><p class="eyebrow">LITERATURRECHERCHE</p><h3>Projektbezogen recherchieren</h3><p class="hint">Der Score nutzt direkte Wortübereinstimmungen aus Forschungsprofil und Metadaten; er ist keine Trefferwahrscheinlichkeit.</p></div></header><form data-research-form="project" class="research-form"><div class="research-query-row"><input name="query" required placeholder="Suchbegriffe, Boolesche Operatoren oder DOI …"><label class="result-limit">Treffer<select name="limit"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label><button class="primary-btn" type="submit">Suchen</button><button class="secondary-btn" type="button" data-save-research>Suche speichern</button></div><div class="research-provider-list" data-research-providers="project">' + providerChoices('project') + '</div></form><details class="research-settings"><summary>Relevanzkriterien</summary><div class="form-three"><label>Titel %<input data-research-weight="title" type="number" min="0" value="' + esc(weights.title) + '"></label><label>Abstract %<input data-research-weight="abstract" type="number" min="0" value="' + esc(weights.abstract) + '"></label><label>Schlagwörter %<input data-research-weight="keywords" type="number" min="0" value="' + esc(weights.keywords) + '"></label><label>Fachkontext %<input data-research-weight="subject" type="number" min="0" value="' + esc(weights.subject) + '"></label></div><button type="button" class="secondary-btn" data-save-research-settings>Gewichtung speichern</button></details><div class="research-suggestions">' + (project.tags || []).slice(0, 6).map((tag) => '<button type="button" class="quiet-btn" data-research-suggestion="' + esc(tag) + '">' + esc(tag) + '</button>').join("") + '</div><div class="research-status" data-research-status="project">Noch keine Suche ausgeführt.</div><div class="research-results" data-research-results="project"></div><div class="saved-searches"><strong>Gespeicherte Suchen</strong>' + (saved.length ? saved.map((entry) => '<button type="button" class="quiet-btn" data-run-saved-search="' + esc(entry.id) + '">' + esc(entry.label) + '</button>').join("") : '<span class="hint"> Noch keine.</span>') + '</div></section>';
+  const cutoffYear = project.researchSettings?.classification?.cutoffYear || 1945;
+  return '<section class="research-panel panel-card"><header><div><p class="eyebrow">LITERATURRECHERCHE</p><h3>Projektbezogen recherchieren</h3><p class="hint">Der Score nutzt direkte Wortübereinstimmungen aus Forschungsprofil und Metadaten; er ist keine Trefferwahrscheinlichkeit. Quellen bis ' + esc(cutoffYear) + ' werden nur heuristisch eingeordnet.</p></div></header><form data-research-form="project" class="research-form"><div class="research-query-row"><input name="query" required placeholder="Suchbegriffe, Boolesche Operatoren oder DOI …"><label class="result-limit">Treffer<select name="limit"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label><button class="primary-btn" type="submit">Suchen</button><button class="secondary-btn" type="button" data-save-research>Suche speichern</button></div><div class="research-provider-list" data-research-providers="project">' + providerChoices('project') + '</div></form><details class="research-settings"><summary>Relevanzkriterien</summary><div class="form-three"><label>Titel %<input data-research-weight="title" type="number" min="0" value="' + esc(weights.title) + '"></label><label>Abstract %<input data-research-weight="abstract" type="number" min="0" value="' + esc(weights.abstract) + '"></label><label>Schlagwörter %<input data-research-weight="keywords" type="number" min="0" value="' + esc(weights.keywords) + '"></label><label>Projektkontext %<input data-research-weight="subject" type="number" min="0" value="' + esc(weights.subject) + '"></label></div><button type="button" class="secondary-btn" data-save-research-settings>Gewichtung speichern</button></details><div class="research-suggestions">' + (project.tags || []).slice(0, 6).map((tag) => '<button type="button" class="quiet-btn" data-research-suggestion="' + esc(tag) + '">' + esc(tag) + '</button>').join("") + '</div><div class="research-status" data-research-status="project">Noch keine Suche ausgeführt.</div><div class="research-results" data-research-results="project"></div><div class="saved-searches"><strong>Gespeicherte Suchen</strong>' + (saved.length ? saved.map((entry) => '<button type="button" class="quiet-btn" data-run-saved-search="' + esc(entry.id) + '">' + esc(entry.label) + '</button>').join("") : '<span class="hint"> Noch keine.</span>') + '</div></section>';
 }
 
 async function loadResearchProviders() {
@@ -599,6 +644,7 @@ function openProjectDialog() {
   $("projectSubject").value = project.subject || "";
   $("projectPriority").value = project.priority || "normal";
   $("projectTags").value = (project.tags || []).join(", ");
+  $("projectClassificationCutoffYear").value = project.researchSettings?.classification?.cutoffYear || 1945;
   $("projectQuestion").value = project.researchQuestion || "";
   $("projectGoal").value = project.paperGoal || "";
   $("projectHypothesis").value = project.hypothesis || "";
@@ -622,6 +668,7 @@ async function saveProjectDialog(event) {
     subject: $("projectSubject").value.trim(),
     priority: $("projectPriority").value,
     tags: $("projectTags").value.trim(),
+    classificationCutoffYear: $("projectClassificationCutoffYear").value,
     researchQuestion: $("projectQuestion").value.trim(),
     paperGoal: $("projectGoal").value.trim(),
     hypothesis: $("projectHypothesis").value.trim(),
@@ -1026,7 +1073,7 @@ document.addEventListener("click", (event) => {
   const clearResearchFilters = event.target.closest('[data-clear-research-result-filters]');
   if (clearResearchFilters) {
     const scope = clearResearchFilters.dataset.clearResearchResultFilters;
-    state.researchResultFilters[scope] = { title: '', author: '', fromYear: '', toYear: '', provider: '', sort: 'relevance' };
+    state.researchResultFilters[scope] = { title: '', author: '', fromYear: '', toYear: '', provider: '', classification: '', sort: 'relevance' };
     return renderResearch(scope, state.researchResults[scope]);
   }
   const bookmarkButton = event.target.closest('[data-toggle-saved-research]');
@@ -1037,6 +1084,8 @@ document.addEventListener("click", (event) => {
   if (savedImportButton) return importSavedResearchResultToZotero(savedImportButton.dataset.importSavedZotero, savedImportButton.dataset.importKind).catch((error) => toast(error.message, 'error'));
   const importButton = event.target.closest('[data-import-zotero]');
   if (importButton) return importResearchResultToZotero(importButton.dataset.importZotero, importButton.dataset.importKind).catch((error) => toast(error.message, 'error'));
+  const classificationButton = event.target.closest('[data-set-research-classification]');
+  if (classificationButton) return setResearchClassification(classificationButton.dataset.setResearchClassification, classificationButton.dataset.classificationCategory).catch((error) => toast(error.message, 'error'));
   const removeButton = event.target.closest("[data-remove-reference]");
   if (removeButton) return removeReference(removeButton.dataset.removeReference).catch((error) => toast(error.message, "error"));
   const issueButton = event.target.closest("[data-publish-issue]");

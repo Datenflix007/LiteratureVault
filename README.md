@@ -77,7 +77,7 @@ erscheinen und Recherchetreffer importiert werden können.
 4. In Zotero **Ansicht → MyLiteratureVault-Projekte mit Zotero
    synchronisieren** wählen.
 
-Die Erweiterung ist Version **0.4.3** und für Zotero `10.0.*` vorgesehen. Sie
+Die Erweiterung ist Version **0.4.4** und für Zotero `10.0.*` vorgesehen. Sie
 prüft beim Start und danach etwa alle 30 Sekunden, ob ein Abgleich ansteht.
 
 ## So benutzen Sie das Tool
@@ -106,8 +106,9 @@ prüft beim Start und danach etwa alle 30 Sekunden, ob ein Abgleich ansteht.
 2. Quellen aktivieren und die Trefferzahl wählen (25, 50 oder 100 pro Abruf).
 3. Die Liste bei Bedarf mit **Weitere Treffer laden** erweitern. Die Anzeige
    nennt zusätzlich die von den Datenbanken gemeldete Gesamtzahl.
-4. Bereits geladene Treffer nach Titel, Autor:in, Jahr oder Provider filtern
-   und nach Titel, Autor:in, Jahr oder Provider sortieren.
+4. Bereits geladene Treffer nach Titel, Autor:in, Jahr, Provider und Bereich
+   (Quellen, Literatur, Unklar) filtern und nach Relevanz, Titel, Autor:in,
+   Jahr oder Provider sortieren.
 5. **Details** zeigt die verfügbaren bibliografischen Metadaten; **Original**
    öffnet den Nachweis beim jeweiligen Provider.
 
@@ -116,6 +117,58 @@ und der öffentliche ThULB-Jena-Katalog. JSTOR wird nicht gecrawlt: Sein XML
 Gateway setzt eine institutionelle Metasearch-Vereinbarung voraus und bleibt
 ohne diese Lizenz deaktiviert. Andere gekennzeichnete Anbieter sind externe
 oder konfigurationsabhängige Ziele.
+
+### Quellen, Literatur und „Unklar“ einordnen
+
+Jedes Projekt hat im **Projektbrief** ein eigenes Grenzjahr (standardmäßig
+1945). Die projektbezogene Suche trennt Treffer in **Quellen**,
+**Sekundärliteratur** und **Unklar**. Die Zuordnung ist eine nachvollziehbare
+Heuristik, keine automatische historische Aussage:
+
+- Ein separat übermitteltes Entstehungsjahr eines Dokuments hat Vorrang vor dem
+  Publikationsjahr. Eine 2008 veröffentlichte Edition eines Dokuments von 1939
+  kann daher als Primärquelle erscheinen.
+- Dokumenttyp, Titel, Abstract und Schlagwörter liefern zusätzliche Signale,
+  etwa „Brief“, „Archiv“, „Tagebuch“ oder „Quellenedition“ für mögliche Quellen
+  sowie „Studie“, „Analyse“ oder „Dissertation“ für Forschungsliteratur.
+- Ein Publikationsjahr vor oder nach dem Grenzjahr ist ausschließlich ein
+  schwaches Zusatzsignal. Fehlen belastbare Metadaten, bleibt der Treffer
+  **Unklar** und wird als unsicher gekennzeichnet.
+
+Direkt an jeder Trefferkarte können Sie **Quelle** oder **Literatur** wählen.
+Diese manuelle Entscheidung wird ausschließlich für das gewählte Projekt
+gespeichert und hat immer Vorrang vor der Automatik. Ist der Titel bereits in
+Zotero importiert, verschiebt das Plugin beim nächsten Abgleich dieselbe
+Zotero-Referenz in die passende Untersammlung. Der Eintrag, seine Metadaten und
+seine Anhänge werden dabei nicht kopiert oder gelöscht.
+
+### Relevanzscore: Formel und Grenzen
+
+Der Relevanzscore ist ein deterministischer Wert von 0 bis 100 und **keine
+statistische Trefferwahrscheinlichkeit**. Er nutzt nur direkte, normalisierte
+Wortübereinstimmungen zwischen dem Projektprofil (Forschungsfrage, These,
+Schlagwörter, Begriffe, Fachgebiet und Suchanfrage) und den tatsächlich
+verfügbaren Metadaten des Treffers.
+
+Für jedes verfügbare Feld wird zunächst eine Feldübereinstimmung `m_f` von
+0–100 berechnet. Sie entspricht dem Anteil der Profilbegriffe, die im Feld
+vorkommen; als wichtig konfigurierte Begriffe zählen doppelt. Danach gilt:
+
+```text
+Score = round( Σ(w_f × m_f) / Σ(w_f für vorhandene Felder) )
+```
+
+Die Standardgewichte sind Titel `30`, Abstract `40`, Schlagwörter `20` und
+Projektkontext `10`. „Projektkontext“ vergleicht Profilbegriffe mit vorhandenen
+Kontextmetadaten des Treffers (Dokumenttyp und Verlag), nicht mit einem
+hinzuerfundenen Inhalt. Fehlende Felder werden offen genannt und aus dem
+Nenner entfernt.
+
+Beispiel: Titel `50 %`, Abstract `25 %`, Schlagwörter fehlen und
+Projektkontext `0 %` bei den Standardgewichten ergibt
+`round((30×50 + 40×25 + 10×0) / (30+40+10)) = 31`. Die aufklappbare
+Begründung jeder Trefferkarte zeigt die tatsächlich gefundenen Begriffe,
+Feldwerte, verwendeten Gewichte und fehlenden Metadaten.
 
 ### Treffer merken und nach Zotero übernehmen
 
@@ -180,6 +233,11 @@ Sammlungen geschieht bewusst nicht automatisch durch den Abgleich.
 
 # Zotero-Plugin neu bauen
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build-zotero-plugin.ps1
+
+# Klassifikations- und Zotero-Verschiebe-Tests
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\research-classification.tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\project-classification-persistence.tests.ps1
+node .\tests\zotero-collection-move.tests.mjs
 ```
 
 ## Technischer Überblick

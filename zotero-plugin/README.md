@@ -2,7 +2,7 @@
 
 Das Plugin verbindet die lokale MyLiteratureVault-UI mit Zotero und legt für
 jedes Projekt echte Sammlungen in **Meine Bibliothek** an. Aktuelle Version:
-**0.4.3**. Sie ist für **Zotero 10.0.\*** freigegeben.
+**0.4.4**. Sie ist für **Zotero 10.0.\*** freigegeben.
 
 ## Voraussetzungen
 
@@ -56,6 +56,12 @@ Die Projekt-UI liest die bibliografischen Einträge aus den Unterordnern direkt
 aus: Einträge in **Literatur** erscheinen im Literatur-Regal, Einträge in
 **Quellen** im Quellen-Regal. PDF-Anhänge, Notizen und Annotationen werden
 dabei nicht als eigenständige Quellenkarten gelistet.
+
+Wenn eine manuelle Klassifikation einen bereits importierten Titel von
+**Literatur** nach **Quellen** (oder umgekehrt) verschiebt, ändert das Plugin
+nur dessen Mitgliedschaft in den beiden Projekt-Untersammlungen. Der Zotero-
+Eintrag, seine Metadaten und mögliche Anhänge bleiben erhalten und werden nicht
+dupliziert.
 
 Zum Öffnen der lokalen Oberfläche in Zotero:
 

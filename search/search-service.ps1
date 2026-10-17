@@ -151,7 +151,8 @@ function New-NormalizedResearchResult {
         [string]$Provider, [string]$ProviderRecordId, [string]$Title, [string[]]$Authors = @(), [string]$PublicationYear = "",
         [string]$PublicationType = "", [string]$Abstract = "", [string[]]$Keywords = @(), [string]$Language = "",
         [string]$Doi = "", [string[]]$Isbn = @(), [string[]]$Issn = @(), [string]$SourceUrl = "", [string]$FulltextUrl = "",
-        [string]$OpenAccessStatus = "unknown", [string]$Publisher = "", [string]$Availability = "nicht ermittelt"
+        [string]$OpenAccessStatus = "unknown", [string]$Publisher = "", [string]$Availability = "nicht ermittelt",
+        [string]$SourceYear = "", [string]$SourceDate = ""
     )
     $doiValue = "$Doi".Trim() -replace "^https?://(dx\.)?doi\.org/", ""
     $fingerprint = if ($doiValue) { "doi:$($doiValue.ToLowerInvariant())" } elseif ($Isbn.Count) { "isbn:$((@($Isbn)[0] -replace '[^0-9Xx]', '').ToUpperInvariant())" } else { "title:$((ConvertTo-ResearchTokens $Title) -join '-')|author:$((ConvertTo-ResearchTokens (@($Authors)[0])) -join '-')|year:$PublicationYear" }
@@ -164,7 +165,10 @@ function New-NormalizedResearchResult {
         publicationYear = "$PublicationYear"; publicationType = "$PublicationType"; abstract = ConvertFrom-ResearchHtml $Abstract; keywords = @($Keywords | Where-Object { "$_".Trim() } | Select-Object -Unique)
         language = "$Language".Trim().ToLowerInvariant(); doi = $doiValue; isbn = @($Isbn | Where-Object { "$_".Trim() } | Select-Object -Unique); issn = @($Issn | Where-Object { "$_".Trim() } | Select-Object -Unique)
         sourceUrl = "$SourceUrl".Trim(); fulltextUrl = "$FulltextUrl".Trim(); openAccessStatus = "$OpenAccessStatus".Trim(); publisher = "$Publisher".Trim(); availability = "$Availability".Trim()
-        retrievedAt = (Get-Date).ToString("o"); relevance = $null
+        # publicationYear is the bibliographic publication date. sourceYear/sourceDate
+        # may only be populated when a provider explicitly reports an historical
+        # document's creation date; they are never inferred from a title.
+        sourceYear = "$SourceYear"; sourceDate = "$SourceDate"; retrievedAt = (Get-Date).ToString("o"); relevance = $null; classification = $null
     }
 }
 
@@ -232,9 +236,11 @@ function Add-ResearchRelevance {
         title = "$($Result.title) $($Result.subtitle)"
         abstract = "$($Result.abstract)"
         keywords = (@($Result.keywords) -join " ")
-        subject = "$($Project.subject) $($Result.publicationType) $($Result.publisher)"
+        # Only result metadata belongs on this side of the comparison. Project
+        # terms live in the profile; adding them here would create false matches.
+        subject = "$($Result.publicationType) $($Result.publisher)"
     }
-    $availableWeight = 0.0; $weightedScore = 0.0; $matched = @(); $basis = @(); $missing = @()
+    $availableWeight = 0.0; $weightedScore = 0.0; $matched = @(); $basis = @(); $missing = @(); $fieldMatches = @()
     foreach ($field in $fields.Keys) {
         if (-not "$($fields[$field])".Trim()) { $missing += $field; continue }
         $overlap = Get-ResearchTokenOverlap $profile.tokens $profile.importantTerms $fields[$field]
@@ -242,12 +248,91 @@ function Add-ResearchRelevance {
         $weightedScore += [double]$weights[$field] * $overlap.score
         $matched += @($overlap.matches)
         $basis += $field
+        $fieldMatches += [PSCustomObject]@{ field = $field; label = @{ title = 'Titel'; abstract = 'Abstract'; keywords = 'Schlagwörter'; subject = 'Projektkontext' }[$field]; weight = [double]$weights[$field]; overlap = $overlap.score; matches = @($overlap.matches) }
     }
     $score = if ($availableWeight -gt 0 -and $profile.hasContext) { [math]::Round($weightedScore / $availableWeight) } else { 0 }
     $label = if ($score -ge 75) { "Sehr hohe thematische Übereinstimmung" } elseif ($score -ge 55) { "Hohe Übereinstimmung" } elseif ($score -ge 30) { "Mittlere Übereinstimmung" } else { "Geringe Übereinstimmung" }
     $Result.relevance = [PSCustomObject]@{
-        score = $score; label = $label; matchedTerms = @($matched | Select-Object -Unique); dataBasis = @($basis); missingFields = @($missing)
+        score = $score; label = $label; matchedTerms = @($matched | Select-Object -Unique); dataBasis = @($basis); missingFields = @($missing); fields = @($fieldMatches); weights = [PSCustomObject]@{ title = $weights.title; abstract = $weights.abstract; keywords = $weights.keywords; subject = $weights.subject }; availableWeight = [math]::Round($availableWeight, 2)
         explanation = if ($profile.hasContext) { "Deterministischer Relevanzscore aus direkten Begriffstreffern; keine Wahrscheinlichkeit und keine semantische Schlussfolgerung." } else { "Für einen Relevanzscore fehlen Forschungsfrage, Schlagwörter oder Suchbegriffe." }
+    }
+    return $Result
+}
+
+function Get-ProjectClassificationSettings {
+    param($Project)
+    $cutoffYear = 1945
+    if ($null -ne $Project -and $null -ne $Project.researchSettings -and $null -ne $Project.researchSettings.classification) {
+        $candidate = 0
+        [void][int]::TryParse("$($Project.researchSettings.classification.cutoffYear)", [ref]$candidate)
+        if ($candidate -ge 1000 -and $candidate -le 2999) { $cutoffYear = $candidate }
+    }
+    return [PSCustomObject]@{ cutoffYear = $cutoffYear }
+}
+
+function Get-ResearchClassificationOverride {
+    param($Project, [string]$ResultId)
+    if ($null -eq $Project -or -not $ResultId) { return $null }
+    return @($Project.researchClassifications | Where-Object { "$($_.resultId)" -eq $ResultId -and "$($_.category)" -in @('source', 'literature') } | Sort-Object updatedAt -Descending | Select-Object -First 1)[0]
+}
+
+function Get-ResearchYear {
+    param($Value)
+    $year = 0
+    if ("$Value" -match '(?<!\d)(1[0-9]{3}|2[0-9]{3})(?!\d)') { [void][int]::TryParse($matches[1], [ref]$year) }
+    return $year
+}
+
+function Add-ResearchClassification {
+    param($Result, $Project)
+    if ($null -eq $Project) { return $Result }
+    $override = Get-ResearchClassificationOverride $Project "$($Result.resultId)"
+    if ($override) {
+        $Result.classification = [PSCustomObject]@{
+            category = "$($override.category)"; origin = 'manual'; confidence = 'manual'; cutoffYear = (Get-ProjectClassificationSettings $Project).cutoffYear
+            reason = 'Manuell für dieses Projekt zugeordnet.'; signals = @('Manuelle Entscheidung hat Vorrang.'); sourceYear = "$($Result.sourceYear)"; publicationYear = "$($Result.publicationYear)"
+        }
+        return $Result
+    }
+
+    $settings = Get-ProjectClassificationSettings $Project
+    $publicationYear = Get-ResearchYear $Result.publicationYear
+    $sourceYear = Get-ResearchYear $(if ("$($Result.sourceYear)".Trim()) { $Result.sourceYear } else { $Result.sourceDate })
+    $text = (@($Result.title, $Result.publicationType, $Result.keywords, $Result.abstract) -join ' ').ToLowerInvariant()
+    $sourcePattern = '(?i)\b(archiv|archival|handschrift|manuskript|brief|briefe|korrespondenz|tagebuch|diary|akte[n]?|protokoll|chronik|zeitung|rede|gesetz|verordnung|quelle[n]?|primary source|quellenedition|edition|ediert|dokumente?)\b'
+    $literaturePattern = '(?i)\b(studie|study|analyse|analysis|forschung|research|monograph|monografie|journal|article|aufsatz|dissertation|thesis|review|literaturbericht)\b'
+    $sourceSignal = $text -match $sourcePattern
+    $literatureSignal = $text -match $literaturePattern
+    $signals = @()
+    $category = 'unclear'; $confidence = 'low'; $reason = 'Die vorhandenen Metadaten reichen für eine belastbare Einordnung nicht aus.'
+
+    if ($sourceYear -and $sourceYear -le $settings.cutoffYear) {
+        $category = 'source'; $confidence = if ($sourceSignal) { 'high' } else { 'medium' }
+        $signals += "Explizites Entstehungsjahr $sourceYear liegt am oder vor dem Grenzjahr $($settings.cutoffYear)."
+        if ($publicationYear -and $publicationYear -gt $settings.cutoffYear) { $signals += "Das Publikationsjahr $publicationYear ist davon getrennt (z. B. Edition oder Neuveröffentlichung)." }
+        $reason = 'Als historische Primärquelle eingeordnet, weil ein separates Entstehungsjahr vorliegt.'
+    } elseif ($sourceSignal -and $publicationYear -and $publicationYear -le $settings.cutoffYear) {
+        $category = 'source'; $confidence = 'medium'
+        $signals += "Dokumenttyp/Titel weist auf eine Quelle hin; Publikationsjahr $publicationYear liegt am oder vor $($settings.cutoffYear)."
+        $reason = 'Als wahrscheinliche Primärquelle eingeordnet; das Entstehungsjahr ist nicht separat belegt.'
+    } elseif ($sourceSignal -and $sourceYear -eq 0) {
+        $category = 'unclear'; $confidence = 'low'
+        $signals += 'Titel, Typ oder Schlagwörter deuten auf eine Quelle, aber ein separates Entstehungsjahr fehlt.'
+        $reason = 'Mögliche historische Quelle, aber ohne belegtes Entstehungsjahr nicht automatisch zugeordnet.'
+    } elseif ($literatureSignal -or ($publicationYear -and $publicationYear -gt $settings.cutoffYear)) {
+        $category = 'literature'; $confidence = if ($literatureSignal -and $publicationYear) { 'high' } else { 'medium' }
+        if ($literatureSignal) { $signals += 'Dokumenttyp, Titel, Abstract oder Schlagwörter weisen auf Forschungsliteratur hin.' }
+        if ($publicationYear -and $publicationYear -gt $settings.cutoffYear) { $signals += "Publikationsjahr $publicationYear liegt nach dem Grenzjahr $($settings.cutoffYear) (nur Heuristik)." }
+        $reason = 'Als Sekundärliteratur eingeordnet; ein separates historisches Entstehungsjahr ist nicht vorhanden.'
+    } elseif ($publicationYear -and $publicationYear -le $settings.cutoffYear) {
+        $signals += "Publikationsjahr $publicationYear liegt am oder vor dem Grenzjahr, ist ohne Dokumenttyp aber nur eine Heuristik."
+    } else {
+        $signals += 'Publikationsjahr, Dokumenttyp oder historisches Entstehungsjahr fehlen oder sind nicht aussagekräftig.'
+    }
+
+    $Result.classification = [PSCustomObject]@{
+        category = $category; origin = 'automatic'; confidence = $confidence; cutoffYear = $settings.cutoffYear; reason = $reason
+        signals = @($signals); sourceYear = if ($sourceYear) { "$sourceYear" } else { '' }; publicationYear = "$($Result.publicationYear)"
     }
     return $Result
 }
@@ -283,7 +368,8 @@ function Invoke-ResearchSearch {
     $cache = Get-ResearchCache
     $cached = @($cache.entries | Where-Object { $_.key -eq $cacheKey -and $_.expiresAt -gt (Get-Date).ToString("o") } | Select-Object -First 1)
     if ($cached -and -not $SkipCache) {
-        return [PSCustomObject]@{ query = Get-ResearchQueryRepresentation $Request; results = @($cached[0].response.results); providers = @($cached[0].response.providers); errors = @($cached[0].response.errors); totalAvailable = $cached[0].response.totalAvailable; hasMore = $cached[0].response.hasMore; offset = $Request.offset; cached = $true; retrievedAt = $cached[0].response.retrievedAt; suggestions = if ($Project) { Get-ResearchSuggestions $Project } else { @() } }
+        $cachedResults = @($cached[0].response.results | ForEach-Object { Add-ResearchClassification (Add-ResearchRelevance $_ $Project $Request) $Project })
+        return [PSCustomObject]@{ query = Get-ResearchQueryRepresentation $Request; results = $cachedResults; providers = @($cached[0].response.providers); errors = @($cached[0].response.errors); totalAvailable = $cached[0].response.totalAvailable; hasMore = $cached[0].response.hasMore; offset = $Request.offset; cached = $true; retrievedAt = $cached[0].response.retrievedAt; suggestions = if ($Project) { Get-ResearchSuggestions $Project } else { @() } }
     }
     $allResults = @(); $providerStates = @(); $errors = @()
     foreach ($providerId in @($Request.providers)) {
@@ -306,7 +392,7 @@ function Invoke-ResearchSearch {
             $providerStates += [PSCustomObject]@{ id = $providerId; name = $provider.name; status = "error"; count = 0; total = 0; message = $message; lastSuccessAt = "" }
         }
     }
-    $results = @(Merge-NormalizedResearchResults $allResults | Where-Object { Test-ResearchResultFilter $_ $Request } | ForEach-Object { Add-ResearchRelevance $_ $Project $Request })
+    $results = @(Merge-NormalizedResearchResults $allResults | Where-Object { Test-ResearchResultFilter $_ $Request } | ForEach-Object { Add-ResearchClassification (Add-ResearchRelevance $_ $Project $Request) $Project })
     $results = switch ($Request.sort) {
         "year-asc" { @($results | Sort-Object @{ Expression = { [int]($_.publicationYear -as [int]) }; Descending = $false }, title) }
         "year-desc" { @($results | Sort-Object @{ Expression = { [int]($_.publicationYear -as [int]) }; Descending = $true }, title) }
@@ -327,7 +413,7 @@ function Get-ProjectResearchProfile {
     param([string]$ProjectId)
     $project = Get-ProjectById $ProjectId
     Ensure-ProjectModel $project
-    return [PSCustomObject]@{ projectId = $project.id; suggestions = Get-ResearchSuggestions $project; weights = Get-ResearchWeights $project; importantTerms = @(ConvertTo-ResearchStringArray $project.researchSettings.importantTerms) }
+    return [PSCustomObject]@{ projectId = $project.id; suggestions = Get-ResearchSuggestions $project; weights = Get-ResearchWeights $project; importantTerms = @(ConvertTo-ResearchStringArray $project.researchSettings.importantTerms); classification = Get-ProjectClassificationSettings $project }
 }
 
 function Set-ProjectResearchSettings {
@@ -346,6 +432,11 @@ function Set-ProjectResearchSettings {
         foreach ($key in $weightKeys) { $project[0].researchSettings.weights.$key = [math]::Round(100 * $candidate[$key] / $sum, 2) }
     }
     if (Test-BodyProperty $Body "importantTerms") { $project[0].researchSettings.importantTerms = ConvertTo-ResearchStringArray $Body.importantTerms }
+    if (Test-BodyProperty $Body "cutoffYear") {
+        $cutoffYear = 0; [void][int]::TryParse("$(Get-BodyValue $Body 'cutoffYear')", [ref]$cutoffYear)
+        if ($cutoffYear -lt 1000 -or $cutoffYear -gt 2999) { throw 'Das Grenzjahr muss zwischen 1000 und 2999 liegen.' }
+        $project[0].researchSettings.classification.cutoffYear = $cutoffYear
+    }
     $project[0].updatedAt = (Get-Date).ToString("o"); Save-ProjectStore $store
     return Get-ProjectResearchProfile $ProjectId
 }

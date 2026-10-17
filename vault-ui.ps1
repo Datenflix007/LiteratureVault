@@ -157,7 +157,8 @@ function Ensure-ProjectModel {
         updatedAt = "$($Project.createdAt)"
         references = @()
         todos = @()
-        researchSettings = [PSCustomObject]@{ weights = [PSCustomObject]@{ title = 30; abstract = 40; keywords = 20; subject = 10 }; importantTerms = @() }
+        researchSettings = [PSCustomObject]@{ weights = [PSCustomObject]@{ title = 30; abstract = 40; keywords = 20; subject = 10 }; importantTerms = @(); classification = [PSCustomObject]@{ cutoffYear = 1945 } }
+        researchClassifications = @()
         savedResearchSearches = @()
         zoteroImportQueue = @()
         archivedAt = ""
@@ -192,9 +193,16 @@ function Ensure-ProjectModel {
         if ($null -eq $Project.researchSettings.weights.PSObject.Properties[$weight]) { Set-ModelProperty $Project.researchSettings.weights $weight (@{ title = 30; abstract = 40; keywords = 20; subject = 10 }[$weight]) }
     }
     if ($null -eq $Project.researchSettings.PSObject.Properties['importantTerms'] -or $null -eq $Project.researchSettings.importantTerms) { Set-ModelProperty $Project.researchSettings 'importantTerms' @() }
+    if ($null -eq $Project.researchSettings.PSObject.Properties['classification'] -or $null -eq $Project.researchSettings.classification -or $Project.researchSettings.classification -is [string]) { Set-ModelProperty $Project.researchSettings 'classification' ([PSCustomObject]@{}) }
+    if ($null -eq $Project.researchSettings.classification.PSObject.Properties['cutoffYear']) { Set-ModelProperty $Project.researchSettings.classification 'cutoffYear' 1945 }
+    $cutoffYear = 0; [void][int]::TryParse("$($Project.researchSettings.classification.cutoffYear)", [ref]$cutoffYear)
+    if ($cutoffYear -lt 1000 -or $cutoffYear -gt 2999) { $cutoffYear = 1945 }
+    $Project.researchSettings.classification.cutoffYear = $cutoffYear
     $Project.researchSettings.importantTerms = @($Project.researchSettings.importantTerms | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -Unique)
     $Project.savedResearchSearches = @($Project.savedResearchSearches | Where-Object { $null -ne $_ })
     $Project.zoteroImportQueue = @($Project.zoteroImportQueue | Where-Object { $null -ne $_ })
+    if ($null -eq $Project.PSObject.Properties['researchClassifications'] -or $null -eq $Project.researchClassifications) { Set-ModelProperty $Project 'researchClassifications' @() }
+    $Project.researchClassifications = @($Project.researchClassifications | Where-Object { $null -ne $_ -and "$($_.resultId)" -match '^[a-f0-9]{40}$' -and "$($_.category)" -in @('source', 'literature') })
 
     $normalizedTodos = @()
     $seenIssueNumbers = @{}
@@ -255,6 +263,9 @@ function Ensure-ProjectModel {
             doi = ""
             url = ""
             note = ""
+            resultId = ""
+            classificationSource = ""
+            classificationUpdatedAt = ""
             addedAt = (Get-Date).ToString("o")
         }
         foreach ($property in $referenceDefaults.GetEnumerator()) {
@@ -385,7 +396,7 @@ function New-Project {
         projectType = "$(Get-BodyValue $Body 'projectType' 'other')"; subject = "$(Get-BodyValue $Body 'subject')".Trim(); priority = "$(Get-BodyValue $Body 'priority' 'normal')"
         tags = @("$(Get-BodyValue $Body 'tags' @())" -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
         status = "planning"; researchQuestion = "$(Get-BodyValue $Body 'researchQuestion')".Trim(); researchConcept = [PSCustomObject]@{ topic = ""; question = ""; relevance = ""; gap = ""; theory = ""; terms = ""; method = ""; sources = ""; contribution = ""; limits = "" }; paperGoal = "$(Get-BodyValue $Body 'paperGoal')".Trim()
-        abstract = ""; notes = ""; deadline = "$(Get-BodyValue $Body 'deadline')".Trim(); outline = ""; references = @(); todos = @(); researchSettings = [PSCustomObject]@{ weights = [PSCustomObject]@{ title = 30; abstract = 40; keywords = 20; subject = 10 }; importantTerms = @() }; savedResearchSearches = @(); zoteroImportQueue = @(); archivedAt = ""; trashedAt = ""
+        abstract = ""; notes = ""; deadline = "$(Get-BodyValue $Body 'deadline')".Trim(); outline = ""; references = @(); todos = @(); researchSettings = [PSCustomObject]@{ weights = [PSCustomObject]@{ title = 30; abstract = 40; keywords = 20; subject = 10 }; importantTerms = @(); classification = [PSCustomObject]@{ cutoffYear = 1945 } }; researchClassifications = @(); savedResearchSearches = @(); zoteroImportQueue = @(); archivedAt = ""; trashedAt = ""
         zoteroLibraryID = $null; zoteroCollectionKey = ""; zoteroCollectionName = ""; zoteroSyncStatus = "pending"; zoteroLastSyncAt = ""; zoteroSyncMessage = "Wartet auf den lokalen Zotero-Plugin-Abgleich."; nextIssueNumber = 1
     }
     if ("$(Get-BodyValue $Body 'status')" -in @("planning", "research", "writing", "review", "done")) { $project.status = "$(Get-BodyValue $Body 'status')" }
@@ -556,6 +567,12 @@ function Set-ProjectDetails {
     if ("$(Get-BodyValue $Body 'projectType')" -in @("term_paper", "seminar_paper", "paper", "research_project", "dissertation", "other")) { $project[0].projectType = "$(Get-BodyValue $Body 'projectType')" }
     if ("$(Get-BodyValue $Body 'priority')" -in @("low", "normal", "high")) { $project[0].priority = "$(Get-BodyValue $Body 'priority')" }
     if (Test-BodyProperty $Body "tags") { $project[0].tags = @("$(Get-BodyValue $Body 'tags')" -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique) }
+    if (Test-BodyProperty $Body 'classificationCutoffYear') {
+        Ensure-ProjectModel $project[0]
+        $cutoffYear = 0; [void][int]::TryParse("$(Get-BodyValue $Body 'classificationCutoffYear')", [ref]$cutoffYear)
+        if ($cutoffYear -lt 1000 -or $cutoffYear -gt 2999) { throw 'Das Grenzjahr muss zwischen 1000 und 2999 liegen.' }
+        $project[0].researchSettings.classification.cutoffYear = $cutoffYear
+    }
     if (Test-BodyProperty $Body "researchConcept" -and $null -ne $Body.researchConcept) {
         foreach ($field in @("topic", "question", "relevance", "gap", "theory", "terms", "method", "sources", "contribution", "limits")) {
             if ($null -ne $Body.researchConcept.PSObject.Properties[$field]) { $project[0].researchConcept.$field = "$(Get-BodyValue $Body.researchConcept $field)".Trim() }
@@ -870,9 +887,9 @@ function Queue-ResearchResultForZotero {
     $existing = @($project[0].zoteroImportQueue | Where-Object { $_.fingerprint -eq $fingerprint -and $_.status -in @('pending', 'completed') } | Select-Object -First 1)
     if ($existing) { return $existing[0] }
     $metadata = [PSCustomObject]@{
-        resultId = "$(Get-BodyValue $result 'resultId')".Trim(); title = $title; authors = @(Get-BodyValue $result 'authors' @()); publicationYear = "$(Get-BodyValue $result 'publicationYear')".Trim(); publicationType = "$(Get-BodyValue $result 'publicationType')".Trim()
+        resultId = "$(Get-BodyValue $result 'resultId')".Trim(); title = $title; authors = @(Get-BodyValue $result 'authors' @()); publicationYear = "$(Get-BodyValue $result 'publicationYear')".Trim(); sourceYear = "$(Get-BodyValue $result 'sourceYear')".Trim(); sourceDate = "$(Get-BodyValue $result 'sourceDate')".Trim(); publicationType = "$(Get-BodyValue $result 'publicationType')".Trim()
         abstract = "$(Get-BodyValue $result 'abstract')".Trim(); keywords = @(Get-BodyValue $result 'keywords' @()); language = "$(Get-BodyValue $result 'language')".Trim(); doi = $doi; isbn = @(Get-BodyValue $result 'isbn' @()); issn = @(Get-BodyValue $result 'issn' @())
-        sourceUrl = "$(Get-BodyValue $result 'sourceUrl')".Trim(); fulltextUrl = "$(Get-BodyValue $result 'fulltextUrl')".Trim(); publisher = "$(Get-BodyValue $result 'publisher')".Trim(); providers = @(Get-BodyValue $result 'providers' @())
+        sourceUrl = "$(Get-BodyValue $result 'sourceUrl')".Trim(); fulltextUrl = "$(Get-BodyValue $result 'fulltextUrl')".Trim(); publisher = "$(Get-BodyValue $result 'publisher')".Trim(); providers = @(Get-BodyValue $result 'providers' @()); classification = Get-BodyValue $result 'classification' $null
     }
     $entry = [PSCustomObject]@{ id = [guid]::NewGuid().ToString('N'); fingerprint = $fingerprint; kind = $kind; status = 'pending'; result = $metadata; requestedAt = (Get-Date).ToString('o'); completedAt = ''; zoteroKey = ''; message = 'Wartet auf den lokalen Zotero-Plugin-Import.' }
     $project[0].zoteroImportQueue = @($project[0].zoteroImportQueue) + @($entry); $project[0].updatedAt = (Get-Date).ToString('o'); Save-ProjectStore $store
@@ -888,8 +905,9 @@ function Complete-ResearchResultZoteroImport {
     Ensure-ProjectModel $project[0]; $entry = @($project[0].zoteroImportQueue | Where-Object { $_.id -eq $ImportId } | Select-Object -First 1)
     if (-not $entry) { throw 'Importauftrag wurde nicht gefunden.' }
     $entry[0].status = 'completed'; $entry[0].zoteroKey = $key; $entry[0].completedAt = (Get-Date).ToString('o'); $entry[0].message = "In Zotero angelegt oder wiederverwendet: $key"
+    $classificationOrigin = "$(Get-BodyValue (Get-BodyValue $entry[0].result 'classification' $null) 'origin')"
     if (-not @($project[0].references | Where-Object { $_.zoteroKey -eq $key } | Select-Object -First 1)) {
-        $project[0].references = @($project[0].references) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString('N'); zoteroKey = $key; kind = $entry[0].kind; title = $entry[0].result.title; creators = (@($entry[0].result.authors) -join '; '); year = $entry[0].result.publicationYear; itemType = $entry[0].result.publicationType; doi = $entry[0].result.doi; url = if ($entry[0].result.sourceUrl) { $entry[0].result.sourceUrl } else { $entry[0].result.fulltextUrl }; note = ''; addedAt = (Get-Date).ToString('o') })
+        $project[0].references = @($project[0].references) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString('N'); zoteroKey = $key; kind = $entry[0].kind; title = $entry[0].result.title; creators = (@($entry[0].result.authors) -join '; '); year = $entry[0].result.publicationYear; itemType = $entry[0].result.publicationType; doi = $entry[0].result.doi; url = if ($entry[0].result.sourceUrl) { $entry[0].result.sourceUrl } else { $entry[0].result.fulltextUrl }; note = ''; resultId = $entry[0].result.resultId; classificationSource = if ($classificationOrigin -eq 'manual') { 'manual' } else { '' }; classificationUpdatedAt = ''; addedAt = (Get-Date).ToString('o') })
     }
     $project[0].updatedAt = (Get-Date).ToString('o'); Save-ProjectStore $store
     return @{ ok = $true; zoteroKey = $key }
@@ -905,6 +923,31 @@ function Set-ProjectReference {
     if ("$(Get-BodyValue $Body 'kind')" -in @("literature", "source")) { $reference[0].kind = "$(Get-BodyValue $Body 'kind')" }
     if (Test-BodyProperty $Body "note") { $reference[0].note = "$(Get-BodyValue $Body 'note')".Trim() }
     $project[0].updatedAt = (Get-Date).ToString("o")
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Set-ProjectResearchClassification {
+    param([string]$ProjectId, [string]$ResultId, $Body)
+    if ($ResultId -notmatch '^[a-f0-9]{40}$') { throw 'Ungültige Recherchetreffer-ID.' }
+    $category = "$(Get-BodyValue $Body 'category')".Trim().ToLowerInvariant()
+    if ($category -notin @('source', 'literature')) { throw 'Eine manuelle Zuordnung muss Quelle oder Literatur sein.' }
+    $store = Get-ProjectStore; $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw 'Projekt wurde nicht gefunden.' }
+    Ensure-ProjectModel $project[0]; $now = (Get-Date).ToString('o')
+    $manual = [PSCustomObject]@{ resultId = $ResultId; category = $category; origin = 'manual'; updatedAt = $now }
+    $project[0].researchClassifications = @($project[0].researchClassifications | Where-Object { "$($_.resultId)" -ne $ResultId }) + @($manual)
+
+    # A pending import is routed to the manually chosen child collection. A
+    # completed import is represented by one project reference and is moved by
+    # the plugin without creating or deleting the Zotero item itself.
+    $matchingImports = @($project[0].zoteroImportQueue | Where-Object { "$($_.result.resultId)" -eq $ResultId })
+    foreach ($entry in @($matchingImports | Where-Object { $_.status -eq 'pending' })) { $entry.kind = $category }
+    $matchingKeys = @($matchingImports | ForEach-Object { "$($_.zoteroKey)".Trim().ToUpperInvariant() } | Where-Object { $_ -match '^[A-Z0-9]{8}$' } | Select-Object -Unique)
+    foreach ($reference in @($project[0].references | Where-Object { "$($_.resultId)" -eq $ResultId -or $matchingKeys -contains "$($_.zoteroKey)".Trim().ToUpperInvariant() })) {
+        $reference.kind = $category; $reference.resultId = $ResultId; $reference.classificationSource = 'manual'; $reference.classificationUpdatedAt = $now
+    }
+    $project[0].zoteroSyncStatus = 'pending'; $project[0].zoteroSyncMessage = 'Manuelle Quellenklassifikation wartet auf den Zotero-Abgleich.'; $project[0].updatedAt = $now
     Save-ProjectStore $store
     return Get-ProjectSummary $project[0]
 }
@@ -1231,6 +1274,10 @@ function Handle-Api {
             $request = New-ResearchRequest (Read-JsonBody $Context.Request)
             if (-not (Get-ResearchQueryText $request)) { throw "Bitte mindestens einen Suchbegriff, DOI, ISBN oder eine ISSN eingeben." }
             Send-Json $Context (Invoke-ResearchSearch $request (Get-ProjectById $matches[1]))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/research/classifications/([a-f0-9]{40})$" -and $method -eq "PATCH") {
+            Send-Json $Context (Set-ProjectResearchClassification $matches[1] $matches[2] (Read-JsonBody $Context.Request))
             return
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/research/saved-searches$" -and $method -eq "GET") {
