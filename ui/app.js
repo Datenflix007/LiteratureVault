@@ -11,7 +11,10 @@ const state = {
   zoteroCollectionLoading: {},
   searchTimer: null,
   conceptTimer: null,
-  selectedTaskId: ""
+  selectedTaskId: "",
+  researchProviders: [],
+  researchResults: { global: null, project: null },
+  savedResearchSearches: []
 };
 
 const $ = (id) => document.getElementById(id);
@@ -192,6 +195,62 @@ function renderSidebarProjects() {
   ).join("");
 }
 
+function providerChoices(scope) {
+  if (!state.researchProviders.length) return '<span class="hint">Quellen werden geladen …</span>';
+  return state.researchProviders.map((provider) => provider.enabled
+    ? '<label class="provider-choice"><input type="checkbox" name="providers" value="' + esc(provider.id) + '" checked> ' + esc(provider.name) + '</label>'
+    : '<a class="provider-choice disabled" href="' + esc(provider.searchUrl) + '" target="_blank" rel="noreferrer" title="' + esc(provider.message) + '">' + esc(provider.name) + ' ↗</a>'
+  ).join("");
+}
+
+function researchResultCard(result) {
+  const authors = (result.authors || []).join(", ");
+  const relevance = result.relevance ? '<span class="relevance-score">Relevanzscore: ' + esc(result.relevance.score) + '/100</span>' : '';
+  const urls = result.fulltextUrl || result.sourceUrl;
+  const provider = (result.providers || [result.provider]).join(" · ");
+  const details = result.relevance ? '<p class="hint">' + esc(result.relevance.label) + ' · ' + esc((result.relevance.matchedTerms || []).join(", ") || "keine direkten Begriffstreffer") + '<br>' + esc(result.relevance.explanation) + '</p>' : '';
+  return '<article class="research-result"><div><span class="source-key">' + esc(provider) + '</span>' + relevance + '<h3>' + esc(result.title) + '</h3><p>' + esc([authors, result.publicationYear, result.publicationType].filter(Boolean).join(" · ")) + '</p>' + (result.abstract ? '<details><summary>Abstract und Nachweis</summary><p>' + esc(result.abstract) + '</p>' + (result.doi ? '<p>DOI: ' + esc(result.doi) + '</p>' : '') + details + '</details>' : details) + '</div>' + (urls ? '<a class="secondary-btn" href="' + esc(urls) + '" target="_blank" rel="noreferrer">Original öffnen ↗</a>' : '') + '</article>';
+}
+
+function renderResearch(scope, response) {
+  const status = document.querySelector('[data-research-status="' + scope + '"]');
+  const target = document.querySelector('[data-research-results="' + scope + '"]');
+  if (!status || !target) return;
+  if (!response) { status.textContent = "Noch keine Suche ausgeführt."; target.innerHTML = ""; return; }
+  const providers = (response.providers || []).map((provider) => provider.name + ': ' + provider.count + (provider.status === 'error' ? ' (Fehler)' : '')).join(' · ');
+  status.textContent = (response.cached ? 'Zwischengespeicherte' : 'Live-') + 'Ergebnisse: ' + (response.results || []).length + ' Treffer. ' + providers;
+  const errors = (response.errors || []).map((error) => '<p class="hint error-copy">' + esc(error.provider + ': ' + error.message) + '</p>').join("");
+  target.innerHTML = errors + ((response.results || []).length ? response.results.map(researchResultCard).join("") : '<p class="empty-mini">Keine Treffer mit den gewählten Filtern.</p>');
+}
+
+function projectResearchPanel(project) {
+  const saved = state.savedResearchSearches || project.savedResearchSearches || [];
+  return '<section class="research-panel panel-card"><header><div><p class="eyebrow">LITERATURRECHERCHE</p><h3>Projektbezogen recherchieren</h3><p class="hint">Der Score nutzt direkte Wortübereinstimmungen aus Forschungsprofil und Metadaten; er ist keine Trefferwahrscheinlichkeit.</p></div></header><form data-research-form="project" class="research-form"><div class="research-query-row"><input name="query" required placeholder="Suchbegriffe, Boolesche Operatoren oder DOI …"><button class="primary-btn" type="submit">Suchen</button><button class="secondary-btn" type="button" data-save-research>Suche speichern</button></div><div class="research-provider-list" data-research-providers="project">' + providerChoices('project') + '</div></form><div class="research-suggestions">' + (project.tags || []).slice(0, 6).map((tag) => '<button type="button" class="quiet-btn" data-research-suggestion="' + esc(tag) + '">' + esc(tag) + '</button>').join("") + '</div><div class="research-status" data-research-status="project">Noch keine Suche ausgeführt.</div><div class="research-results" data-research-results="project"></div><div class="saved-searches"><strong>Gespeicherte Suchen</strong>' + (saved.length ? saved.map((entry) => '<button type="button" class="quiet-btn" data-run-saved-search="' + esc(entry.id) + '">' + esc(entry.label) + '</button>').join("") : '<span class="hint"> Noch keine.</span>') + '</div></section>';
+}
+
+async function loadResearchProviders() {
+  state.researchProviders = await api('/api/research/providers');
+  document.querySelectorAll('[data-research-providers="global"]').forEach((target) => { target.innerHTML = providerChoices('global'); });
+  renderWorkspace();
+}
+
+function requestFromForm(form) {
+  const formData = new FormData(form);
+  const value = (name) => String(formData.get(name) || '').trim();
+  return { query: value('query'), title: value('title'), author: value('author'), keywords: value('keywords'), doi: value('doi'), isbn: value('isbn'), issn: value('issn'), language: value('language'), fromYear: value('fromYear'), toYear: value('toYear'), sort: value('sort') || 'relevance', providers: formData.getAll('providers') };
+}
+
+async function runResearch(form) {
+  const scope = form.dataset.researchForm;
+  const request = requestFromForm(form);
+  if (!request.query && !request.title && !request.author && !request.doi && !request.isbn && !request.issn) throw new Error('Bitte einen Suchbegriff oder Identifier eingeben.');
+  const project = scope === 'project' ? projectById() : null;
+  const path = project ? '/api/projects/' + project.id + '/research/search' : '/api/research/search';
+  const response = await api(path, { method: 'POST', body: JSON.stringify(request) });
+  state.researchResults[scope] = response;
+  renderResearch(scope, response);
+}
+
 function workspaceTaskCard(task, references) {
   const linked = (task.referenceKeys || []).map((key) => references.find((reference) => reference.zoteroKey === String(key || "").trim().toUpperCase())).filter(Boolean);
   const due = task.dueDate ? '<span class="task-due">◷ ' + esc(formatDate(task.dueDate)) + '</span>' : "";
@@ -267,6 +326,7 @@ function renderWorkspace() {
     researchQuestionCard +
     '<div class="workspace-metrics compact-metrics"><article><span>Aufgaben</span><strong>' + (project.todoCount || 0) + '</strong><p>' + (project.inProgressTodoCount || 0) + ' in Arbeit · ' + (project.doneTodoCount || 0) + ' erledigt</p></article><article><span>Literatur</span><strong>' + literatureCount + '</strong><p>aus der Zotero-Projektsammlung</p></article><article><span>Quellen</span><strong>' + sourceCount + '</strong><p>aus der Zotero-Projektsammlung</p></article><article><span>Termin</span><strong class="date-metric">' + esc(project.deadline ? formatDate(project.deadline) : "—") + '</strong><p>Projektbrief</p></article></div>' +
     researchConceptEditor(project) +
+    projectResearchPanel(project) +
     '<section class="tasks-panel panel-card"><header><div><p class="eyebrow">LOKALE ISSUES</p><h3>Aufgaben</h3><p class="hint">Jede Aufgabe hat eine lokale Issue-Nummer, Verlauf, Kommentare und Checkliste.</p></div><button type="button" class="primary-btn compact" data-new-task>+ Aufgabe</button></header><div class="task-board">' +
       taskColumn(project, references, "open", "Offen", "Nächster sinnvoller Schritt") + taskColumn(project, references, "in_progress", "In Arbeit", "Gerade im Fokus") + taskColumn(project, references, "blocked", "Blockiert", "Benötigt eine Klärung") + taskColumn(project, references, "done", "Erledigt", "Dokumentierter Fortschritt") +
     '</div></section>' +
@@ -787,8 +847,20 @@ document.addEventListener("click", (event) => {
   if (removeButton) return removeReference(removeButton.dataset.removeReference).catch((error) => toast(error.message, "error"));
   const issueButton = event.target.closest("[data-publish-issue]");
   if (issueButton) return publishIssue(issueButton.dataset.publishIssue).catch((error) => toast(error.message, "error"));
+  const suggestion = event.target.closest('[data-research-suggestion]');
+  if (suggestion) { const input = document.querySelector('[data-research-form="project"] input[name="query"]'); if (input) { input.value = suggestion.dataset.researchSuggestion; input.focus(); } return; }
+  const saved = event.target.closest('[data-run-saved-search]');
+  if (saved) { const entry = (state.savedResearchSearches || []).find((item) => item.id === saved.dataset.runSavedSearch); const form = document.querySelector('[data-research-form="project"]'); if (entry && form) { Object.entries(entry.request || {}).forEach(([key, value]) => { const field = form.elements.namedItem(key); if (field && typeof value === 'string') field.value = value; }); runResearch(form).catch((error) => toast(error.message, 'error')); } return; }
+  if (event.target.closest('[data-save-research]')) { const project = projectById(); const form = document.querySelector('[data-research-form="project"]'); if (project && form) { const request = requestFromForm(form); const label = window.prompt('Name der gespeicherten Suche:', request.query); if (label) api('/api/projects/' + project.id + '/research/saved-searches', { method: 'POST', body: JSON.stringify({ label, request }) }).then(async () => { state.savedResearchSearches = await api('/api/projects/' + project.id + '/research/saved-searches'); renderWorkspace(); toast('Suche gespeichert.'); }).catch((error) => toast(error.message, 'error')); } return; }
   const row = event.target.closest("[data-open-project-row]");
   if (row && !event.target.closest("button, a, select, input")) return openProject(row.dataset.openProjectRow);
+});
+
+document.addEventListener('submit', (event) => {
+  const form = event.target.closest('[data-research-form]');
+  if (!form) return;
+  event.preventDefault();
+  runResearch(form).catch((error) => toast(error.message, 'error'));
 });
 
 document.addEventListener("change", (event) => {
@@ -871,4 +943,4 @@ window.setInterval(() => {
   if (saved) setWidth(saved);
 })();
 
-Promise.all([loadStatus(), loadProjects()]).catch((error) => toast(error.message, "error"));
+Promise.all([loadStatus(), loadProjects(), loadResearchProviders()]).catch((error) => toast(error.message, "error"));

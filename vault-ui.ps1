@@ -124,6 +124,8 @@ function Test-BodyProperty {
     return $null -ne $Body -and $null -ne $Body.PSObject.Properties[$Name]
 }
 
+. (Join-Path $ScriptDir "search\search-service.ps1")
+
 function Get-NormalizedReferenceKeys {
     param($Values)
     $keys = @()
@@ -155,6 +157,8 @@ function Ensure-ProjectModel {
         updatedAt = "$($Project.createdAt)"
         references = @()
         todos = @()
+        researchSettings = [PSCustomObject]@{ weights = [PSCustomObject]@{ title = 30; abstract = 40; keywords = 20; subject = 10 }; importantTerms = @() }
+        savedResearchSearches = @()
         archivedAt = ""
         trashedAt = ""
         zoteroLibraryID = $null
@@ -181,6 +185,14 @@ function Ensure-ProjectModel {
     if ("$($Project.projectType)" -notin @("term_paper", "seminar_paper", "paper", "research_project", "dissertation", "other")) { $Project.projectType = "other" }
     if ("$($Project.priority)" -notin @("low", "normal", "high")) { $Project.priority = "normal" }
     $Project.tags = @("$($Project.tags -join '|')".Split('|') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($null -eq $Project.researchSettings -or $Project.researchSettings -is [string]) { $Project.researchSettings = [PSCustomObject]@{} }
+    if ($null -eq $Project.researchSettings.PSObject.Properties['weights'] -or $null -eq $Project.researchSettings.weights) { Set-ModelProperty $Project.researchSettings 'weights' ([PSCustomObject]@{}) }
+    foreach ($weight in @('title', 'abstract', 'keywords', 'subject')) {
+        if ($null -eq $Project.researchSettings.weights.PSObject.Properties[$weight]) { Set-ModelProperty $Project.researchSettings.weights $weight (@{ title = 30; abstract = 40; keywords = 20; subject = 10 }[$weight]) }
+    }
+    if ($null -eq $Project.researchSettings.PSObject.Properties['importantTerms'] -or $null -eq $Project.researchSettings.importantTerms) { Set-ModelProperty $Project.researchSettings 'importantTerms' @() }
+    $Project.researchSettings.importantTerms = @($Project.researchSettings.importantTerms | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    $Project.savedResearchSearches = @($Project.savedResearchSearches | Where-Object { $null -ne $_ })
 
     $normalizedTodos = @()
     $seenIssueNumbers = @{}
@@ -273,6 +285,7 @@ function Get-ProjectSummary {
         archivedAt = $Project.archivedAt; trashedAt = $Project.trashedAt
         zotero = @{ libraryID = $Project.zoteroLibraryID; collectionKey = $Project.zoteroCollectionKey; collectionName = $Project.zoteroCollectionName; status = $Project.zoteroSyncStatus; lastSyncAt = $Project.zoteroLastSyncAt; message = $Project.zoteroSyncMessage }
         notes = $Project.notes; deadline = $Project.deadline; outline = $Project.outline
+        researchSettings = $Project.researchSettings; savedResearchSearches = @($Project.savedResearchSearches)
         todoCount = $todos.Count; openTodoCount = $openTodoCount; inProgressTodoCount = $inProgressTodoCount; blockedTodoCount = $blockedTodoCount; doneTodoCount = $doneTodoCount; progress = $progress
         referenceCount = $references.Count; literatureCount = @($references | Where-Object { $_.kind -eq "literature" }).Count; sourceCount = @($references | Where-Object { $_.kind -eq "source" }).Count
         todos = $todos; tasks = $todos; references = $references
@@ -305,7 +318,7 @@ function New-Project {
         projectType = "$(Get-BodyValue $Body 'projectType' 'other')"; subject = "$(Get-BodyValue $Body 'subject')".Trim(); priority = "$(Get-BodyValue $Body 'priority' 'normal')"
         tags = @("$(Get-BodyValue $Body 'tags' @())" -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
         status = "planning"; researchQuestion = "$(Get-BodyValue $Body 'researchQuestion')".Trim(); researchConcept = [PSCustomObject]@{ topic = ""; question = ""; relevance = ""; gap = ""; theory = ""; terms = ""; method = ""; sources = ""; contribution = ""; limits = "" }; paperGoal = "$(Get-BodyValue $Body 'paperGoal')".Trim()
-        abstract = ""; notes = ""; deadline = "$(Get-BodyValue $Body 'deadline')".Trim(); outline = ""; references = @(); todos = @(); archivedAt = ""; trashedAt = ""
+        abstract = ""; notes = ""; deadline = "$(Get-BodyValue $Body 'deadline')".Trim(); outline = ""; references = @(); todos = @(); researchSettings = [PSCustomObject]@{ weights = [PSCustomObject]@{ title = 30; abstract = 40; keywords = 20; subject = 10 }; importantTerms = @() }; savedResearchSearches = @(); archivedAt = ""; trashedAt = ""
         zoteroLibraryID = $null; zoteroCollectionKey = ""; zoteroCollectionName = ""; zoteroSyncStatus = "pending"; zoteroLastSyncAt = ""; zoteroSyncMessage = "Wartet auf den lokalen Zotero-Plugin-Abgleich."; nextIssueNumber = 1
     }
     if ("$(Get-BodyValue $Body 'status')" -in @("planning", "research", "writing", "review", "done")) { $project.status = "$(Get-BodyValue $Body 'status')" }
@@ -1057,6 +1070,16 @@ function Handle-Api {
             Send-Json $Context @($items | Where-Object { -not $_.pull_request })
             return
         }
+        if ($Path -eq "/api/research/providers" -and $method -eq "GET") {
+            Send-Json $Context @(Get-ResearchProviderCatalog)
+            return
+        }
+        if ($Path -eq "/api/research/search" -and $method -eq "POST") {
+            $request = New-ResearchRequest (Read-JsonBody $Context.Request)
+            if (-not (Get-ResearchQueryText $request)) { throw "Bitte mindestens einen Suchbegriff, DOI, ISBN oder eine ISSN eingeben." }
+            Send-Json $Context (Invoke-ResearchSearch $request)
+            return
+        }
         if ($Path -eq "/api/projects" -and $method -eq "GET") {
             $store = Get-ProjectStore
             $scope = [string]$Context.Request.QueryString.Get("scope")
@@ -1074,6 +1097,32 @@ function Handle-Api {
         if ($Path -eq "/api/projects" -and $method -eq "POST") {
             $body = Read-JsonBody $Context.Request
             Send-Json $Context (New-Project "$(Get-BodyValue $body 'name')" $body) 201
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/research/profile$" -and $method -eq "GET") {
+            Send-Json $Context (Get-ProjectResearchProfile $matches[1])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/research/settings$" -and $method -eq "PATCH") {
+            Send-Json $Context (Set-ProjectResearchSettings $matches[1] (Read-JsonBody $Context.Request))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/research/search$" -and $method -eq "POST") {
+            $request = New-ResearchRequest (Read-JsonBody $Context.Request)
+            if (-not (Get-ResearchQueryText $request)) { throw "Bitte mindestens einen Suchbegriff, DOI, ISBN oder eine ISSN eingeben." }
+            Send-Json $Context (Invoke-ResearchSearch $request (Get-ProjectById $matches[1]))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/research/saved-searches$" -and $method -eq "GET") {
+            Send-Json $Context @(Get-ProjectSavedResearchSearches $matches[1])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/research/saved-searches$" -and $method -eq "POST") {
+            Send-Json $Context (Save-ProjectResearchSearch $matches[1] (Read-JsonBody $Context.Request)) 201
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/research/saved-searches/([a-f0-9]{32})$" -and $method -eq "DELETE") {
+            Send-Json $Context (Remove-ProjectResearchSearch $matches[1] $matches[2])
             return
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})$" -and $method -eq "GET") {
