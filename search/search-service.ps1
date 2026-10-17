@@ -10,10 +10,10 @@ $script:ResearchProviderDefinitions = @(
     [PSCustomObject]@{ id = "base"; name = "BASE"; mode = "external"; enabled = $false; documentationUrl = "https://www.base-search.net/"; searchUrl = "https://www.base-search.net/Search/Results"; message = "Adapter erst aktivieren, wenn ein zulässiger API-Zugang konfiguriert ist."; capabilities = @() },
     [PSCustomObject]@{ id = "ddb"; name = "Deutsche Digitale Bibliothek"; mode = "api-key-required"; enabled = $false; documentationUrl = "https://pro.deutsche-digitale-bibliothek.de/daten-nutzen/api"; searchUrl = "https://www.deutsche-digitale-bibliothek.de/searchresults"; message = "API-Schlüssel erforderlich; bis zur Konfiguration nur externer Zugang."; capabilities = @() },
     [PSCustomObject]@{ id = "europeana"; name = "Europeana"; mode = "api-key-required"; enabled = $false; documentationUrl = "https://pro.europeana.eu/page/apis"; searchUrl = "https://www.europeana.eu/en/search"; message = "API-Schlüssel erforderlich; bis zur Konfiguration nur externer Zugang."; capabilities = @() },
-    [PSCustomObject]@{ id = "k10plus"; name = "K10plus / GVK"; mode = "setup-required"; enabled = $false; documentationUrl = "https://www.gbv.de/"; searchUrl = "https://kxp.k10plus.de/"; message = "Kein Adapter ohne dokumentierte SRU-/Z39.50-Konfiguration."; capabilities = @() },
-    [PSCustomObject]@{ id = "zdb"; name = "Zeitschriftendatenbank"; mode = "setup-required"; enabled = $false; documentationUrl = "https://www.dnb.de/sru"; searchUrl = "https://zdb-katalog.de/"; message = "Separate ZDB-SRU-Konfiguration erforderlich; keine Artikelmetasuche."; capabilities = @() },
-    [PSCustomObject]@{ id = "ezb"; name = "Elektronische Zeitschriftenbibliothek"; mode = "external"; enabled = $false; documentationUrl = "https://ezb.ur.de/"; searchUrl = "https://ezb.ur.de/"; message = "Zeitschriften- und Lizenznachweise, keine frei aktivierte Artikelsuche."; capabilities = @() },
-    [PSCustomObject]@{ id = "dta"; name = "Deutsches Textarchiv"; mode = "external"; enabled = $false; documentationUrl = "https://www.deutschestextarchiv.de/"; searchUrl = "https://www.deutschestextarchiv.de/search"; message = "Historische Volltexte; Adapter wird nach Schnittstellenprüfung ergänzt."; capabilities = @() }
+    [PSCustomObject]@{ id = "k10plus"; name = "K10plus / GVK"; mode = "sru"; enabled = $true; documentationUrl = "https://www.gbv.de/services/k10plus/"; searchUrl = "https://sru.k10plus.de/gvk"; message = "Öffentliche SRU-Suche im K10plus/GVK-Gesamtkatalog; liefert Katalognachweise."; capabilities = @("keywords", "title", "author", "isbn", "issn", "year") },
+    [PSCustomObject]@{ id = "zdb"; name = "Zeitschriftendatenbank"; mode = "sru"; enabled = $true; documentationUrl = "https://zeitschriftendatenbank.de/services/schnittstellen/sru"; searchUrl = "https://services.dnb.de/sru/zdb"; message = "Öffentliche ZDB-SRU-Schnittstelle für Zeitschriften-, Zeitungs- und Reihentitel; keine Aufsatzdatenbank."; capabilities = @("keywords", "title", "issn", "publisher", "year") },
+    [PSCustomObject]@{ id = "ezb"; name = "Elektronische Zeitschriftenbibliothek"; mode = "xml"; enabled = $true; documentationUrl = "https://www.ur-library.de/ezb-xml/"; searchUrl = "https://ezb.ur.de/searchres.phtml"; message = "Öffentliche XML-Suche nach frei verfügbaren elektronischen Zeitschriften (EZB-Ampel grün)."; capabilities = @("keywords", "title", "issn", "publisher", "subject") },
+    [PSCustomObject]@{ id = "dta"; name = "Deutsches Textarchiv"; mode = "opensearch"; enabled = $true; documentationUrl = "https://www.deutschestextarchiv.de/api"; searchUrl = "https://kaskade.dwds.de/dstar/dta/dstar.perl"; message = "Öffentliche Volltextsuche im historischen DTA-Korpus (ca. 1650–1900)."; capabilities = @("keywords", "title", "author", "year", "subject") }
 )
 
 function Get-ResearchProviderCatalog {
@@ -447,6 +447,10 @@ function Invoke-ResearchSearch {
                 "crossref" { Invoke-CrossrefResearchProvider $Request }
                 "dnb" { Invoke-DnbResearchProvider $Request }
                 "thulb" { Invoke-ThulbResearchProvider $Request }
+                "k10plus" { Invoke-K10plusResearchProvider $Request }
+                "zdb" { Invoke-ZdbResearchProvider $Request }
+                "ezb" { Invoke-EzbResearchProvider $Request }
+                "dta" { Invoke-DtaResearchProvider $Request }
                 default { [PSCustomObject]@{ results = @(); total = 0 } }
             }
             $providerResults = @($providerResponse.results)
@@ -541,3 +545,7 @@ function Remove-ProjectResearchSearch {
 . (Join-Path $PSScriptRoot "providers\crossref.ps1")
 . (Join-Path $PSScriptRoot "providers\dnb.ps1")
 . (Join-Path $PSScriptRoot "providers\thulb.ps1")
+. (Join-Path $PSScriptRoot "providers\k10plus.ps1")
+. (Join-Path $PSScriptRoot "providers\zdb.ps1")
+. (Join-Path $PSScriptRoot "providers\ezb.ps1")
+. (Join-Path $PSScriptRoot "providers\dta.ps1")

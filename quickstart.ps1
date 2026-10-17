@@ -335,6 +335,10 @@ function Start-WebDav {
     $storagePath = Get-StoragePath
     $env:ZOTERO_STORAGE_PATH = $storagePath
     if (-not (Test-Path -LiteralPath $storagePath)) { New-Item -ItemType Directory -Path $storagePath -Force | Out-Null }
+    # Zotero appends /zotero/ to the configured WebDAV endpoint. Apache DAV
+    # does not create this collection on a PUT request, so prepare it here.
+    $zoteroWebDavPath = Join-Path $storagePath "zotero"
+    if (-not (Test-Path -LiteralPath $zoteroWebDavPath)) { New-Item -ItemType Directory -Path $zoteroWebDavPath -Force | Out-Null }
     $projectsPath = Join-Path $storagePath "Projekte"
     if (-not (Test-Path -LiteralPath $projectsPath)) { New-Item -ItemType Directory -Path $projectsPath -Force | Out-Null }
     Write-Info "Externer Speicher: $storagePath"
@@ -350,12 +354,14 @@ function Start-WebDav {
     }
 
     Write-Info "Starte WebDAV Container..."
-    $upOut = docker compose up -d 2>&1
+    # .env.local is intentionally ignored by Git and must be selected
+    # explicitly; Docker Compose otherwise uses only a file named .env.
+    $upOut = docker compose --env-file .env.local up -d 2>&1
     if ($LASTEXITCODE -ne 0) {
         $containerState = Get-WebDavContainerState
         if ($containerState -notin @("created", "running", "restarting")) {
             $upOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-            docker compose logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+            docker compose --env-file .env.local logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
             throw "WebDAV Container konnte nicht gestartet werden."
         }
         Write-Warn "Docker erstellt den Container noch (Status: $containerState). Warte auf WebDAV..."
@@ -378,7 +384,7 @@ function Start-WebDav {
     $fmt = "  {{.Names}} | {{.Status}} | {{.Ports}}"
     docker ps --filter "name=zotero-webdav" --format $fmt 2>&1 |
         Where-Object { $_ } | ForEach-Object { Write-Info $_ }
-    docker compose logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    docker compose --env-file .env.local logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
     throw "WebDAV war nach 2 Minuten nicht bereit (Container-Status: $containerState)."
 }
 

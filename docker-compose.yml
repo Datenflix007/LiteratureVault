@@ -3,12 +3,14 @@ services:
     image: bytemark/webdav
     container_name: zotero-webdav
     restart: unless-stopped
+    # Keep Docker's effective credentials in sync with the local setup file.
+    # Compose otherwise loads only .env automatically, not .env.local.
+    env_file:
+      - .env.local
     ports:
       - "8080:80"
     environment:
       AUTH_TYPE: Basic
-      USERNAME: ${WEBDAV_USERNAME:-zotero}
-      PASSWORD: ${WEBDAV_PASSWORD:-changeme123}
     # The host folder is deliberately outside the repository.  Point this at a
     # folder synced by OneDrive, Nextcloud Desktop or Dropbox (see .env.local).
     volumes:

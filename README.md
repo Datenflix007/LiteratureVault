@@ -59,6 +59,9 @@ zeigt das Skript Status und letzte Container-Logs als Fehlerhilfe.
 Die Datei `.env.local` enthält Ihre lokale Konfiguration und wird nicht in Git
 committet. Ändern Sie `ZOTERO_STORAGE_PATH` nur auf einen tatsächlich lokal
 verfügbaren und von einem Cloud-Desktop-Client synchronisierten Ordner.
+Der Quickstart legt darin auch den benötigten Unterordner `zotero` an: Zotero
+schreibt seine Anhangsdateien automatisch nach `…/zotero/<Schlüssel>.zip`.
+Die in Zotero eingetragene URL bleibt trotzdem `http://localhost:8080`.
 
 ### 3. MyLiteratureVault-Plugin installieren
 
@@ -112,11 +115,15 @@ prüft beim Start und danach etwa alle 30 Sekunden, ob ein Abgleich ansteht.
 5. **Details** zeigt die verfügbaren bibliografischen Metadaten; **Original**
    öffnet den Nachweis beim jeweiligen Provider.
 
-Aktiv recherchierbar sind OpenAlex, Crossref, die Deutsche Nationalbibliothek
-und der öffentliche ThULB-Jena-Katalog. JSTOR wird nicht gecrawlt: Sein XML
-Gateway setzt eine institutionelle Metasearch-Vereinbarung voraus und bleibt
-ohne diese Lizenz deaktiviert. Andere gekennzeichnete Anbieter sind externe
-oder konfigurationsabhängige Ziele.
+Aktiv recherchierbar sind OpenAlex, Crossref, die Deutsche Nationalbibliothek,
+der öffentliche ThULB-Jena-Katalog, K10plus/GVK, die Zeitschriftendatenbank
+(ZDB), die Elektronische Zeitschriftenbibliothek (EZB) und das Deutsche
+Textarchiv (DTA). K10plus, ZDB und EZB liefern Katalog- bzw.
+Zeitschriftennachweise; die EZB-Suche ist auf frei zugängliche Titel beschränkt.
+Das DTA ergänzt historische Volltexttreffer mit Link zum Original. JSTOR wird
+nicht gecrawlt: Sein XML Gateway setzt eine institutionelle
+Metasearch-Vereinbarung voraus. BASE, DDB und Europeana benötigen registrierte
+API-Zugänge; diese Quellen bleiben ohne lokale Konfiguration deaktiviert.
 
 ### Quellen, Literatur und „Unklar“ einordnen
 

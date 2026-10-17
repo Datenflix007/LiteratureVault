@@ -117,6 +117,10 @@ main { min-width: 0; padding: 28px clamp(18px, 3vw, 46px) 48px; }
 .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin: 1px 0 24px; }
 .topbar > div:first-child { min-width: 0; }.topbar h1 { margin-top: 3px; }.eyebrow { color: var(--cyan); font-size: .65rem; font-weight: 800; letter-spacing: .13em; }
 #statusLine { max-width: 900px; margin-top: 5px; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+.vault-wordmark-wrap { min-width: 0; }
+.vault-wordmark { display: flex; align-items: center; gap: 10px; width: fit-content; max-width: 100%; }
+.vault-wordmark h1 { margin: 0; overflow-wrap: anywhere; color: #eff8ff; font-size: clamp(1.32rem, 2.35vw, 1.98rem); font-weight: 790; letter-spacing: -.055em; line-height: 1; text-shadow: 0 3px 18px rgb(84 184 255 / .16); }
+.vault-wordmark h1 span { color: #8ee9c0; background: linear-gradient(105deg, #a5f2cc, #56b8ff); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .badges { display: flex; justify-content: flex-end; gap: 7px; flex-wrap: wrap; max-width: 440px; }
 .badges > span, .state { display: inline-flex; align-items: center; min-height: 25px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; color: var(--muted); background: rgb(12 22 33 / .72); font-size: .7rem; white-space: nowrap; }
 .badges .badge-online { color: #9aeac1; border-color: rgb(73 204 134 / .42); }.badges .badge-warning { color: #ffd38b; border-color: rgb(255 189 89 / .48); }
