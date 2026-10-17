@@ -16,8 +16,8 @@
     <nav>
       <button class="nav active" type="button" data-view="overview"><span class="nav-icon">◈</span><span>Übersicht</span></button>
       <button class="nav" type="button" data-view="workspace"><span class="nav-icon">▤</span><span>Projekt-Workspace</span></button>
-      <button class="nav" type="button" data-view="activity"><span class="nav-icon">⌁</span><span>Aktivität</span></button>
-      <button class="nav" type="button" data-view="pulls"><span class="nav-icon">↗</span><span>Pull Requests</span></button>
+      <button class="nav" type="button" data-view="archive"><span class="nav-icon">□</span><span>Archiv</span></button>
+      <button class="nav" type="button" data-view="trash"><span class="nav-icon">⌫</span><span>Papierkorb</span></button>
     </nav>
     <section class="sidebar-projects" aria-labelledby="sidebarProjectsHeading">
       <div class="side-label" id="sidebarProjectsHeading">PROJEKTE</div>
@@ -47,33 +47,21 @@
     </header>
 
     <section id="overviewView" class="view active">
-      <div class="workspace-hero">
-        <div class="hero-copy">
-          <p class="eyebrow">DEIN WISSENSCHAFTLICHER ARBEITSPLATZ</p>
-          <h2>Vom ersten Gedanken bis zum fertigen Paper.</h2>
-          <p>Projekte, Forschungsfragen, verknüpfte Zotero-Literatur und ausführliche Arbeitsaufgaben bleiben gemeinsam im externen Cloud-Ordner – nie in Git oder Git LFS.</p>
-          <div class="hero-actions">
-            <button id="newProjectBtn" type="button" class="primary-btn">+ Forschungsprojekt anlegen</button>
-            <button type="button" class="secondary-btn" data-view="workspace">Letztes Projekt öffnen</button>
-          </div>
-        </div>
-        <div class="hero-map" aria-label="Projektstruktur">
-          <div class="hero-node root-node">Projekt</div>
-          <div class="hero-branches">
-            <div class="hero-node">Forschungsfrage</div>
-            <div class="hero-node">Literatur</div>
-            <div class="hero-node">Quellen</div>
-            <div class="hero-node">Aufgaben</div>
-          </div>
-          <p>lokal · verknüpft · synchronisiert</p>
-        </div>
-      </div>
-      <div id="overviewMetrics" class="metric-grid" aria-label="Projektkennzahlen"></div>
       <div class="section-heading">
-        <div><p class="eyebrow">PORTFOLIO</p><h2>Deine Forschungsprojekte</h2></div>
-        <button type="button" class="text-btn" data-new-project>Neues Projekt</button>
+        <div><p class="eyebrow">PROJEKTE</p><h2>Aktive Forschungsprojekte</h2><p>Projektdaten bleiben im lokalen, synchronisierten Arbeitsordner. Zotero-Titel werden nur verknüpft.</p></div>
+        <button id="newProjectBtn" type="button" class="primary-btn">Neues Projekt</button>
       </div>
       <div id="projectsList" class="project-grid"></div>
+    </section>
+
+    <section id="trashView" class="view">
+      <div class="section-heading"><div><p class="eyebrow">PAPIERKORB</p><h2>Gelöschte Projekte</h2><p>Wiederherstellen ist jederzeit möglich. Zotero-Einträge und Dateien bleiben beim Verschieben in den Papierkorb unverändert.</p></div></div>
+      <div id="trashList" class="project-grid"></div>
+    </section>
+
+    <section id="archiveView" class="view">
+      <div class="section-heading"><div><p class="eyebrow">ARCHIV</p><h2>Abgeschlossene Projekte</h2><p>Archivierte Projekte bleiben vollständig erhalten und können jederzeit wieder aktiviert werden.</p></div></div>
+      <div id="archiveList" class="project-grid"></div>
     </section>
 
     <section id="workspaceView" class="view">
@@ -87,6 +75,7 @@
         <div class="workspace-toolbar">
           <button type="button" class="back-btn" data-view="overview">← Alle Projekte</button>
           <div class="workspace-toolbar-actions">
+            <button id="syncZoteroBtn" type="button" class="secondary-btn">Zotero-Abgleich anfordern</button>
             <button id="editProjectBtn" type="button" class="secondary-btn">Projektbrief bearbeiten</button>
             <button id="newTaskBtn" type="button" class="primary-btn">+ Aufgabe</button>
           </div>
@@ -107,6 +96,7 @@
     <form id="newProjectForm" class="dialog-body">
       <div><p class="eyebrow">NEUER PROJEKTRAUM</p><h2>Forschungsprojekt anlegen</h2><p class="hint">Im Cloud-Ordner entstehen automatisch <code>Literatur</code> und <code>Quellen</code>. In Zotero wird beim Abgleich direkt unter <code>Meine Bibliothek</code> die passende Sammlung angelegt.</p></div>
       <label>Projektname <span class="required">*</span><input id="newProjectName" required placeholder="z. B. Mittelalterliche Stadträume"></label>
+      <div class="form-two"><label>Projekttyp<select id="newProjectType"><option value="term_paper">Hausarbeit</option><option value="seminar_paper">Seminararbeit</option><option value="paper">Paper</option><option value="research_project">Forschungsprojekt</option><option value="dissertation">Dissertation</option><option value="other">Sonstiges</option></select></label><label>Fachgebiet<input id="newProjectSubject" placeholder="z. B. Geschichtswissenschaft"></label></div>
       <label>Forschungsfrage<textarea id="newProjectQuestion" rows="3" placeholder="Welche Frage soll diese Arbeit beantworten?"></textarea></label>
       <div class="form-two"><label>Arbeitsphase<select id="newProjectStatus"><option value="planning">Konzept</option><option value="research">Recherche</option><option value="writing">Schreiben</option><option value="review">Überarbeitung</option><option value="done">Abgeschlossen</option></select></label><label>Termin<input id="newProjectDeadline" type="date"></label></div>
       <div class="dialog-actions"><button type="button" class="secondary-btn" data-close="newProjectDialog">Abbrechen</button><button type="submit" class="primary-btn">Projekt erstellen</button></div>
@@ -117,8 +107,12 @@
     <form id="projectForm" class="dialog-body">
       <div><p class="eyebrow">PROJEKTBRIEF</p><h2 id="projectDialogTitle">Projekt bearbeiten</h2><p class="hint">Diese Informationen bleiben im externen Projektordner und werden nicht nach GitHub übertragen.</p></div>
       <label>Projektname <span class="required">*</span><input id="projectName" required></label>
+      <label>Beschreibung<textarea id="projectDescription" rows="3" placeholder="Worum geht es in diesem Projekt?"></textarea></label>
+      <div class="form-three"><label>Projekttyp<select id="projectType"><option value="term_paper">Hausarbeit</option><option value="seminar_paper">Seminararbeit</option><option value="paper">Paper</option><option value="research_project">Forschungsprojekt</option><option value="dissertation">Dissertation</option><option value="other">Sonstiges</option></select></label><label>Fachgebiet<input id="projectSubject"></label><label>Priorität<select id="projectPriority"><option value="low">Niedrig</option><option value="normal">Normal</option><option value="high">Hoch</option></select></label></div>
+      <label>Schlagwörter <span class="hint">(mit Komma trennen)</span><input id="projectTags" placeholder="z. B. Mittelalter, Stadtgeschichte"></label>
       <label>Forschungsfrage<textarea id="projectQuestion" rows="3" placeholder="Welche Frage leitest du mit diesem Projekt?"></textarea></label>
       <label>Arbeitsthese / Ziel<textarea id="projectGoal" rows="3" placeholder="Welche These oder welches Ergebnis möchtest du entwickeln?"></textarea></label>
+      <label>Arbeitshypothese<textarea id="projectHypothesis" rows="3" placeholder="Welche Annahme möchtest du prüfen?"></textarea></label>
       <div class="form-two"><label>Arbeitsphase<select id="projectStatus"><option value="planning">Konzept</option><option value="research">Recherche</option><option value="writing">Schreiben</option><option value="review">Überarbeitung</option><option value="done">Abgeschlossen</option></select></label><label>Termin<input id="projectDeadline" type="date"></label></div>
       <label>Gliederung / nächster Argumentationsbogen<textarea id="projectOutline" rows="5" placeholder="1. Einleitung&#10;2. Forschungsstand&#10;3. Analyse …"></textarea></label>
       <label>Private Arbeitsnotizen<textarea id="projectNotes" rows="5" placeholder="Hypothesen, Gesprächsnotizen, offene Gedanken …"></textarea></label>
@@ -126,16 +120,30 @@
     </form>
   </dialog>
 
+  <dialog id="projectActionsDialog"><div class="dialog-body"><div><p class="eyebrow">PROJEKT</p><h2 id="projectActionsTitle">Projekt</h2><p class="hint">Aktionen betreffen nur dieses Projekt. Verknüpfte Zotero-Einträge bleiben immer erhalten.</p></div><div class="action-list"><button type="button" id="actionOpenProject">Öffnen</button><button type="button" id="actionEditProject">Bearbeiten</button><button type="button" id="actionDuplicateProject">Duplizieren</button><button type="button" id="actionArchiveProject">Archivieren</button><button type="button" class="danger-action" id="actionTrashProject">In Papierkorb verschieben</button></div><div class="dialog-actions"><button type="button" class="secondary-btn" data-close="projectActionsDialog">Schließen</button></div></div></dialog>
+
+  <dialog id="deleteProjectDialog"><form id="deleteProjectForm" class="dialog-body"><div><p class="eyebrow">PAPIERKORB</p><h2 id="deleteProjectTitle">Projekt löschen</h2><p id="deleteProjectHint" class="hint"></p></div><label class="label-inline"><input id="deleteProjectFiles" type="checkbox"> Beim endgültigen Löschen auch den verwalteten Projektordner entfernen</label><p class="hint">Zotero-Einträge, Anhänge und Zotero-Datenbanken werden nie gelöscht.</p><div class="dialog-actions"><button type="button" class="secondary-btn" data-close="deleteProjectDialog">Abbrechen</button><button type="submit" class="danger-action">Bestätigen</button></div></form></dialog>
+
   <dialog id="taskDialog">
     <form id="taskForm" class="dialog-body">
       <input id="taskProjectId" type="hidden"><input id="taskId" type="hidden">
       <div><p class="eyebrow">FORSCHUNGSAUFGABE</p><h2 id="taskDialogTitle">Neue Aufgabe</h2><p class="hint">Ausführliche Beschreibungen bleiben lokal. GitHub-Issues werden nur durch die separate Schaltfläche veröffentlicht.</p></div>
       <label>Titel <span class="required">*</span><input id="taskTitle" required placeholder="z. B. Forschungsstand zu Urbanität auswerten"></label>
       <label>Beschreibung / Arbeitsauftrag<textarea id="taskBody" rows="6" placeholder="Kontext, Methode, erwartetes Ergebnis, Fragen …"></textarea></label>
-      <div class="form-three"><label>Status<select id="taskStatus"><option value="open">Offen</option><option value="in_progress">In Arbeit</option><option value="done">Erledigt</option></select></label><label>Priorität<select id="taskPriority"><option value="high">Hoch</option><option value="normal" selected>Normal</option><option value="low">Niedrig</option></select></label><label>Termin<input id="taskDueDate" type="date"></label></div>
+      <div class="form-three"><label>Status<select id="taskStatus"><option value="open">Offen</option><option value="in_progress">In Arbeit</option><option value="blocked">Blockiert</option><option value="done">Erledigt</option></select></label><label>Priorität<select id="taskPriority"><option value="high">Hoch</option><option value="normal" selected>Normal</option><option value="low">Niedrig</option></select></label><label>Termin<input id="taskDueDate" type="date"></label></div>
       <fieldset class="reference-picker"><legend>Verknüpfte Literatur</legend><p class="hint">Wähle bereits zum Projekt hinzugefügte Zotero-Einträge aus.</p><div id="taskReferenceList" class="checkbox-list"></div></fieldset>
       <div class="dialog-actions"><button type="button" class="secondary-btn" data-close="taskDialog">Abbrechen</button><button type="submit" class="primary-btn">Aufgabe speichern</button></div>
     </form>
+  </dialog>
+
+  <dialog id="taskIssueDialog">
+    <div class="dialog-body issue-detail">
+      <div class="issue-detail-head"><div><p class="eyebrow">LOKALES ISSUE</p><h2 id="issueDetailTitle">Aufgabe</h2><p id="issueDetailMeta" class="hint"></p></div><button type="button" class="icon-button" title="Schließen" data-close="taskIssueDialog">×</button></div>
+      <div id="issueDetailBody" class="issue-description"></div>
+      <section class="issue-checklist"><header><h3>Checkliste</h3><span id="issueChecklistProgress" class="hint"></span></header><div id="issueChecklistItems"></div><form id="issueChecklistForm" class="issue-inline-form"><input id="issueChecklistTitle" required placeholder="Nächsten Schritt hinzufügen"><button class="secondary-btn" type="submit">Hinzufügen</button></form></section>
+      <section class="issue-timeline"><h3>Verlauf</h3><div id="issueTimeline"></div></section>
+      <form id="taskCommentForm" class="issue-comment-form"><label>Kommentar<textarea id="taskCommentMessage" rows="3" required placeholder="Beobachtung, Entscheidung oder Rückfrage …"></textarea></label><div class="dialog-actions"><button class="primary-btn" type="submit">Kommentar speichern</button></div></form>
+    </div>
   </dialog>
 
   <dialog id="sourceDialog">

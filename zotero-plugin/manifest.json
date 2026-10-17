@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "MyLiteratureVault",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Synchronizes MyLiteratureVault research projects, collections, and linked references with Zotero.",
   "author": "Datenflix007",
   "homepage_url": "https://github.com/Datenflix007/MyLiteratureVault",

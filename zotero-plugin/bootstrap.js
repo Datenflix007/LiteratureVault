@@ -39,6 +39,32 @@ async function getOrCreateCollection(libraryID, parentCollection, name) {
   return Zotero.Collections.get(id);
 }
 
+function getLinkedProjectCollection(libraryID, project) {
+  const key = String(project.zotero?.collectionKey || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{8}$/.test(key) || typeof Zotero.Collections.getByLibraryAndKey !== "function") {
+    return null;
+  }
+  const collection = Zotero.Collections.getByLibraryAndKey(libraryID, key);
+  return collection && !collection.parentID ? collection : null;
+}
+
+async function reportProjectCollection(project, libraryID, collection) {
+  const payload = JSON.stringify({
+    libraryID,
+    collectionKey: collection.key,
+    collectionName: collection.name
+  });
+  const request = await Zotero.HTTP.request("POST", PROJECTS_API_URL + "/" + project.id + "/zotero-collection", {
+    body: payload,
+    headers: { "Content-Type": "application/json" },
+    responseType: "json",
+    timeout: 5000
+  });
+  if (request.status < 200 || request.status >= 300) {
+    throw new Error("Die Projekt-UI konnte die Zotero-Zuordnung nicht speichern.");
+  }
+}
+
 async function ensureProjectCollections(projects) {
   const libraryID = Zotero.Libraries.userLibraryID;
   let created = 0;
@@ -47,11 +73,19 @@ async function ensureProjectCollections(projects) {
 
   for (const project of projects) {
     const projectName = getProjectCollectionName(project, projects);
-    const beforeProject = Zotero.Collections.getByLibrary(libraryID, false)
+    const linkedProject = getLinkedProjectCollection(libraryID, project);
+    const beforeProject = linkedProject || Zotero.Collections.getByLibrary(libraryID, false)
       .find((collection) => collection.name === projectName);
-    const projectCollection = await getOrCreateCollection(libraryID, null, projectName);
+    const projectCollection = linkedProject || await getOrCreateCollection(libraryID, null, projectName);
     if (!beforeProject) {
       created++;
+    }
+
+    try {
+      await reportProjectCollection(project, libraryID, projectCollection);
+    } catch (error) {
+      // The collection is still valid. Retrying in the next cycle repairs a temporarily unavailable UI.
+      log("Could not persist collection mapping for " + project.name + ": " + error);
     }
 
     const children = {};

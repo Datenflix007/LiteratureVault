@@ -51,6 +51,10 @@ Das mitgelieferte Zotero-Plugin erstellt zusätzlich echte Sammlungen in Ihrer Z
 
 Die Sammlung wird beim Zotero-Start und danach etwa alle 30 Sekunden mit den Projekten aus der lokalen UI abgeglichen. Im Menü `Ansicht` steht außerdem `MyLiteratureVault-Projekte mit Zotero synchronisieren` für einen sofortigen manuellen Abgleich bereit. Bereits vorhandene Sammlungen werden wiederverwendet; die Synchronisierung löscht niemals eigene Zotero-Sammlungen.
 
+Dabei speichert die lokale Projektdatei die stabile Zuordnung aus Projekt-ID, Zotero-Bibliothek und Collection-Key. Ein neues Projekt bleibt funktionsfähig, falls Zotero oder das Plugin gerade nicht läuft: Es erscheint dann als „Abgleich ausstehend“ und wird beim nächsten Plugin-Lauf nachgetragen. Um die Zuordnung zu reparieren, gibt es im Projekt-Workspace „Zotero-Abgleich anfordern“. Ein Umbenennen im Projekt benennt bestehende Zotero-Sammlungen bewusst nicht automatisch um.
+
+Die aktuelle Erweiterung liegt nach dem Build als `dist/myliteraturevault-zotero-0.4.0.xpi` vor. Sie muss in Zotero 10 über `Extras → Erweiterungen → Zahnrad → Add-on aus Datei installieren…` aktualisiert werden; eine Installation wird nicht automatisch ausgelöst.
+
 ## Speicher in der UI ändern
 
 1. UI öffnen: http://localhost:8765

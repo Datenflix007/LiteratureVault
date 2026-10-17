@@ -69,6 +69,10 @@ function Get-ProjectStorePath {
     return Join-Path (Join-Path $root "Projekte") ".myliteraturevault-projects.json"
 }
 
+function Get-ProjectsRootPath {
+    return [IO.Path]::GetFullPath((Join-Path (Ensure-StorageRoot) "Projekte"))
+}
+
 function Get-ProjectStore {
     $storePath = Get-ProjectStorePath
     if (-not (Test-Path -LiteralPath $storePath)) { return [PSCustomObject]@{ version = 2; projects = @() } }
@@ -134,8 +138,15 @@ function Ensure-ProjectModel {
     param($Project)
     if ($null -eq $Project) { return }
     $defaults = [ordered]@{
+        description = ""
+        hypothesis = ""
+        projectType = "other"
+        subject = ""
+        priority = "normal"
+        tags = @()
         status = "planning"
         researchQuestion = ""
+        researchConcept = $null
         paperGoal = ""
         abstract = ""
         notes = ""
@@ -144,15 +155,36 @@ function Ensure-ProjectModel {
         updatedAt = "$($Project.createdAt)"
         references = @()
         todos = @()
+        archivedAt = ""
+        trashedAt = ""
+        zoteroLibraryID = $null
+        zoteroCollectionKey = ""
+        zoteroCollectionName = ""
+        zoteroSyncStatus = "pending"
+        zoteroLastSyncAt = ""
+        zoteroSyncMessage = "Wartet auf den lokalen Zotero-Plugin-Abgleich."
+        nextIssueNumber = 1
     }
     foreach ($property in $defaults.GetEnumerator()) {
         if ($null -eq $Project.PSObject.Properties[$property.Key] -or $null -eq $Project.$($property.Key)) {
             Set-ModelProperty $Project $property.Key $property.Value
         }
     }
+    $conceptDefaults = [ordered]@{ topic = ""; question = ""; relevance = ""; gap = ""; theory = ""; terms = ""; method = ""; sources = ""; contribution = ""; limits = "" }
+    if ($null -eq $Project.researchConcept -or $Project.researchConcept -is [string]) { $Project.researchConcept = [PSCustomObject]@{} }
+    foreach ($property in $conceptDefaults.GetEnumerator()) {
+        if ($null -eq $Project.researchConcept.PSObject.Properties[$property.Key] -or $null -eq $Project.researchConcept.$($property.Key)) {
+            Set-ModelProperty $Project.researchConcept $property.Key $property.Value
+        }
+    }
     if ("$($Project.status)" -notin @("planning", "research", "writing", "review", "done")) { $Project.status = "planning" }
+    if ("$($Project.projectType)" -notin @("term_paper", "seminar_paper", "paper", "research_project", "dissertation", "other")) { $Project.projectType = "other" }
+    if ("$($Project.priority)" -notin @("low", "normal", "high")) { $Project.priority = "normal" }
+    $Project.tags = @("$($Project.tags -join '|')".Split('|') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
 
     $normalizedTodos = @()
+    $seenIssueNumbers = @{}
+    $nextIssueNumber = 1
     foreach ($todo in @($Project.todos)) {
         if ($null -eq $todo) { continue }
         $todoDefaults = [ordered]@{
@@ -163,6 +195,10 @@ function Ensure-ProjectModel {
             referenceKeys = @()
             githubIssueNumber = $null
             githubIssueUrl = ""
+            issueNumber = 0
+            comments = @()
+            checklist = @()
+            events = @()
             createdAt = (Get-Date).ToString("o")
             updatedAt = "$($todo.createdAt)"
         }
@@ -171,14 +207,25 @@ function Ensure-ProjectModel {
                 Set-ModelProperty $todo $property.Key $property.Value
             }
         }
-        if ("$($todo.status)" -notin @("open", "in_progress", "done")) {
+        if ("$($todo.status)" -notin @("open", "in_progress", "blocked", "done")) {
             $todo.status = if ("$($todo.status)" -eq "done") { "done" } else { "open" }
         }
         if ("$($todo.priority)" -notin @("low", "normal", "high")) { $todo.priority = "normal" }
         $todo.referenceKeys = Get-NormalizedReferenceKeys $todo.referenceKeys
+        $issueNumber = 0
+        [void][int]::TryParse("$($todo.issueNumber)", [ref]$issueNumber)
+        if ($issueNumber -lt 1 -or $seenIssueNumbers.ContainsKey($issueNumber)) { $issueNumber = $nextIssueNumber }
+        $seenIssueNumbers[$issueNumber] = $true
+        $todo.issueNumber = $issueNumber
+        if ($issueNumber -ge $nextIssueNumber) { $nextIssueNumber = $issueNumber + 1 }
+        $todo.comments = @($todo.comments | Where-Object { $null -ne $_ })
+        $todo.checklist = @($todo.checklist | Where-Object { $null -ne $_ })
+        $todo.events = @($todo.events | Where-Object { $null -ne $_ })
         $normalizedTodos += $todo
     }
     $Project.todos = @($normalizedTodos)
+    $Project.nextIssueNumber = [math]::Max($nextIssueNumber, 1)
+    if ("$($Project.zoteroSyncStatus)" -notin @("pending", "linked", "error")) { $Project.zoteroSyncStatus = "pending" }
 
     $normalizedReferences = @()
     foreach ($reference in @($Project.references)) {
@@ -217,12 +264,16 @@ function Get-ProjectSummary {
     $doneTodoCount = @($todos | Where-Object { $_.status -eq "done" }).Count
     $inProgressTodoCount = @($todos | Where-Object { $_.status -eq "in_progress" }).Count
     $openTodoCount = @($todos | Where-Object { $_.status -eq "open" }).Count
+    $blockedTodoCount = @($todos | Where-Object { $_.status -eq "blocked" }).Count
     $progress = if ($todos.Count) { [math]::Round(($doneTodoCount / $todos.Count) * 100) } else { 0 }
     return @{
         id = $Project.id; name = $Project.name; folderName = $Project.folderName; createdAt = $Project.createdAt; updatedAt = $Project.updatedAt
-        status = $Project.status; researchQuestion = $Project.researchQuestion; paperGoal = $Project.paperGoal; abstract = $Project.abstract
+        status = $Project.status; researchQuestion = $Project.researchQuestion; researchConcept = $Project.researchConcept; paperGoal = $Project.paperGoal; abstract = $Project.abstract
+        description = $Project.description; hypothesis = $Project.hypothesis; projectType = $Project.projectType; subject = $Project.subject; priority = $Project.priority; tags = @($Project.tags)
+        archivedAt = $Project.archivedAt; trashedAt = $Project.trashedAt
+        zotero = @{ libraryID = $Project.zoteroLibraryID; collectionKey = $Project.zoteroCollectionKey; collectionName = $Project.zoteroCollectionName; status = $Project.zoteroSyncStatus; lastSyncAt = $Project.zoteroLastSyncAt; message = $Project.zoteroSyncMessage }
         notes = $Project.notes; deadline = $Project.deadline; outline = $Project.outline
-        todoCount = $todos.Count; openTodoCount = $openTodoCount; inProgressTodoCount = $inProgressTodoCount; doneTodoCount = $doneTodoCount; progress = $progress
+        todoCount = $todos.Count; openTodoCount = $openTodoCount; inProgressTodoCount = $inProgressTodoCount; blockedTodoCount = $blockedTodoCount; doneTodoCount = $doneTodoCount; progress = $progress
         referenceCount = $references.Count; literatureCount = @($references | Where-Object { $_.kind -eq "literature" }).Count; sourceCount = @($references | Where-Object { $_.kind -eq "source" }).Count
         todos = $todos; tasks = $todos; references = $references
     }
@@ -250,10 +301,16 @@ function New-Project {
     $now = (Get-Date).ToString("o")
     $project = [PSCustomObject]@{
         id = [guid]::NewGuid().ToString("N"); name = $name; folderName = $folderName; createdAt = $now; updatedAt = $now
-        status = "planning"; researchQuestion = "$(Get-BodyValue $Body 'researchQuestion')".Trim(); paperGoal = "$(Get-BodyValue $Body 'paperGoal')".Trim()
-        abstract = ""; notes = ""; deadline = "$(Get-BodyValue $Body 'deadline')".Trim(); outline = ""; references = @(); todos = @()
+        description = "$(Get-BodyValue $Body 'description')".Trim(); hypothesis = "$(Get-BodyValue $Body 'hypothesis')".Trim()
+        projectType = "$(Get-BodyValue $Body 'projectType' 'other')"; subject = "$(Get-BodyValue $Body 'subject')".Trim(); priority = "$(Get-BodyValue $Body 'priority' 'normal')"
+        tags = @("$(Get-BodyValue $Body 'tags' @())" -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+        status = "planning"; researchQuestion = "$(Get-BodyValue $Body 'researchQuestion')".Trim(); researchConcept = [PSCustomObject]@{ topic = ""; question = ""; relevance = ""; gap = ""; theory = ""; terms = ""; method = ""; sources = ""; contribution = ""; limits = "" }; paperGoal = "$(Get-BodyValue $Body 'paperGoal')".Trim()
+        abstract = ""; notes = ""; deadline = "$(Get-BodyValue $Body 'deadline')".Trim(); outline = ""; references = @(); todos = @(); archivedAt = ""; trashedAt = ""
+        zoteroLibraryID = $null; zoteroCollectionKey = ""; zoteroCollectionName = ""; zoteroSyncStatus = "pending"; zoteroLastSyncAt = ""; zoteroSyncMessage = "Wartet auf den lokalen Zotero-Plugin-Abgleich."; nextIssueNumber = 1
     }
     if ("$(Get-BodyValue $Body 'status')" -in @("planning", "research", "writing", "review", "done")) { $project.status = "$(Get-BodyValue $Body 'status')" }
+    if ("$(Get-BodyValue $Body 'projectType')" -in @("term_paper", "seminar_paper", "paper", "research_project", "dissertation", "other")) { $project.projectType = "$(Get-BodyValue $Body 'projectType')" }
+    if ("$(Get-BodyValue $Body 'priority')" -in @("low", "normal", "high")) { $project.priority = "$(Get-BodyValue $Body 'priority')" }
     $store.projects = @($store.projects) + @($project)
     Save-ProjectStore $store
     return Get-ProjectSummary $project
@@ -268,15 +325,19 @@ function New-ProjectTodo {
     if (-not $project) { throw "Projekt wurde nicht gefunden." }
     $now = (Get-Date).ToString("o")
     $status = "$(Get-BodyValue $Body 'status' 'open')"
-    if ($status -notin @("open", "in_progress", "done")) { $status = "open" }
+    if ($status -notin @("open", "in_progress", "blocked", "done")) { $status = "open" }
     $priority = "$(Get-BodyValue $Body 'priority' 'normal')"
     if ($priority -notin @("low", "normal", "high")) { $priority = "normal" }
+    $issueNumber = [math]::Max(1, [int]$project[0].nextIssueNumber)
     $todo = [PSCustomObject]@{
         id = [guid]::NewGuid().ToString("N"); title = $title; body = "$(Get-BodyValue $Body 'body')".Trim(); status = $status; priority = $priority
         dueDate = "$(Get-BodyValue $Body 'dueDate')".Trim(); referenceKeys = Get-NormalizedReferenceKeys (Get-BodyValue $Body 'referenceKeys' @())
-        githubIssueNumber = $null; githubIssueUrl = ""; createdAt = $now; updatedAt = $now
+        githubIssueNumber = $null; githubIssueUrl = ""; issueNumber = $issueNumber; comments = @(); checklist = @()
+        events = @([PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); type = "created"; message = "Aufgabe erstellt."; createdAt = $now })
+        createdAt = $now; updatedAt = $now
     }
     $project[0].todos = @($project[0].todos) + @($todo)
+    $project[0].nextIssueNumber = $issueNumber + 1
     $project[0].updatedAt = $now
     Save-ProjectStore $store
     return Get-ProjectSummary $project[0]
@@ -289,18 +350,111 @@ function Set-ProjectTodo {
     if (-not $project) { throw "Projekt wurde nicht gefunden." }
     $todo = @($project[0].todos | Where-Object { $_.id -eq $TodoId } | Select-Object -First 1)
     if (-not $todo) { throw "TODO wurde nicht gefunden." }
+    $events = @()
     if (Test-BodyProperty $Body "title") {
         $title = "$(Get-BodyValue $Body 'title')".Trim()
         if ([string]::IsNullOrWhiteSpace($title)) { throw "Bitte einen TODO-Titel eingeben." }
+        if ($todo[0].title -ne $title) { $events += "Titel geändert." }
         $todo[0].title = $title
     }
-    if (Test-BodyProperty $Body "body") { $todo[0].body = "$(Get-BodyValue $Body 'body')".Trim() }
-    if ("$(Get-BodyValue $Body 'status')" -in @("open", "in_progress", "done")) { $todo[0].status = "$(Get-BodyValue $Body 'status')" }
-    if ("$(Get-BodyValue $Body 'priority')" -in @("low", "normal", "high")) { $todo[0].priority = "$(Get-BodyValue $Body 'priority')" }
-    if (Test-BodyProperty $Body "dueDate") { $todo[0].dueDate = "$(Get-BodyValue $Body 'dueDate')".Trim() }
-    if (Test-BodyProperty $Body "referenceKeys") { $todo[0].referenceKeys = Get-NormalizedReferenceKeys (Get-BodyValue $Body 'referenceKeys' @()) }
+    if (Test-BodyProperty $Body "body") {
+        $bodyValue = "$(Get-BodyValue $Body 'body')".Trim()
+        if ($todo[0].body -ne $bodyValue) { $events += "Beschreibung geändert." }
+        $todo[0].body = $bodyValue
+    }
+    $status = "$(Get-BodyValue $Body 'status')"
+    if ($status -in @("open", "in_progress", "blocked", "done") -and $todo[0].status -ne $status) { $todo[0].status = $status; $events += "Status auf '$status' gesetzt." }
+    $priority = "$(Get-BodyValue $Body 'priority')"
+    if ($priority -in @("low", "normal", "high") -and $todo[0].priority -ne $priority) { $todo[0].priority = $priority; $events += "Priorität auf '$priority' gesetzt." }
+    if (Test-BodyProperty $Body "dueDate") {
+        $dueDate = "$(Get-BodyValue $Body 'dueDate')".Trim()
+        if ($todo[0].dueDate -ne $dueDate) { $events += "Termin geändert." }
+        $todo[0].dueDate = $dueDate
+    }
+    if (Test-BodyProperty $Body "referenceKeys") {
+        $referenceKeys = Get-NormalizedReferenceKeys (Get-BodyValue $Body 'referenceKeys' @())
+        if ("$($todo[0].referenceKeys -join '|')" -ne "$($referenceKeys -join '|')") { $events += "Verknüpfte Literatur geändert." }
+        $todo[0].referenceKeys = $referenceKeys
+    }
     $todo[0].updatedAt = (Get-Date).ToString("o")
+    foreach ($eventMessage in $events) {
+        $todo[0].events = @($todo[0].events) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); type = "updated"; message = $eventMessage; createdAt = $todo[0].updatedAt })
+    }
     $project[0].updatedAt = $todo[0].updatedAt
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Get-ProjectTodo {
+    param($Project, [string]$TodoId)
+    $todo = @($Project.todos | Where-Object { $_.id -eq $TodoId } | Select-Object -First 1)
+    if (-not $todo) { throw "TODO wurde nicht gefunden." }
+    return $todo[0]
+}
+
+function Add-ProjectTodoComment {
+    param([string]$ProjectId, [string]$TodoId, $Body)
+    $message = "$(Get-BodyValue $Body 'message')".Trim()
+    if ([string]::IsNullOrWhiteSpace($message)) { throw "Bitte einen Kommentar eingeben." }
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $todo = Get-ProjectTodo $project[0] $TodoId
+    $now = (Get-Date).ToString("o")
+    $todo.comments = @($todo.comments) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); message = $message; createdAt = $now })
+    $todo.events = @($todo.events) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); type = "comment"; message = "Kommentar hinzugefügt."; createdAt = $now })
+    $todo.updatedAt = $now; $project[0].updatedAt = $now
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Add-ProjectTodoChecklistItem {
+    param([string]$ProjectId, [string]$TodoId, $Body)
+    $title = "$(Get-BodyValue $Body 'title')".Trim()
+    if ([string]::IsNullOrWhiteSpace($title)) { throw "Bitte einen Checklistenpunkt eingeben." }
+    $store = Get-ProjectStore; $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $todo = Get-ProjectTodo $project[0] $TodoId; $now = (Get-Date).ToString("o")
+    $todo.checklist = @($todo.checklist) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); title = $title; done = $false; createdAt = $now })
+    $todo.events = @($todo.events) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); type = "checklist"; message = "Checklistenpunkt hinzugefügt."; createdAt = $now })
+    $todo.updatedAt = $now; $project[0].updatedAt = $now; Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Set-ProjectTodoChecklistItem {
+    param([string]$ProjectId, [string]$TodoId, [string]$ChecklistId, $Body)
+    $store = Get-ProjectStore; $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $todo = Get-ProjectTodo $project[0] $TodoId
+    $item = @($todo.checklist | Where-Object { $_.id -eq $ChecklistId } | Select-Object -First 1)
+    if (-not $item) { throw "Checklistenpunkt wurde nicht gefunden." }
+    if (Test-BodyProperty $Body "done") { $item[0].done = [bool](Get-BodyValue $Body 'done') }
+    if (Test-BodyProperty $Body "title") { $item[0].title = "$(Get-BodyValue $Body 'title')".Trim() }
+    $now = (Get-Date).ToString("o"); $todo.events = @($todo.events) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString("N"); type = "checklist"; message = "Checklistenpunkt aktualisiert."; createdAt = $now })
+    $todo.updatedAt = $now; $project[0].updatedAt = $now; Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Set-ProjectZoteroCollection {
+    param([string]$ProjectId, $Body)
+    $libraryID = 0; [void][int]::TryParse("$(Get-BodyValue $Body 'libraryID')", [ref]$libraryID)
+    $collectionKey = "$(Get-BodyValue $Body 'collectionKey')".Trim().ToUpperInvariant()
+    if ($libraryID -lt 1 -or $collectionKey -notmatch "^[A-Z0-9]{8}$") { throw "Ungültige Zotero-Sammlungszuordnung." }
+    $store = Get-ProjectStore; $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $project[0].zoteroLibraryID = $libraryID; $project[0].zoteroCollectionKey = $collectionKey
+    $project[0].zoteroCollectionName = "$(Get-BodyValue $Body 'collectionName')".Trim()
+    $project[0].zoteroSyncStatus = "linked"; $project[0].zoteroLastSyncAt = (Get-Date).ToString("o")
+    $project[0].zoteroSyncMessage = "Sammlung in Meine Bibliothek verknüpft."
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Request-ProjectZoteroSync {
+    param([string]$ProjectId)
+    $store = Get-ProjectStore; $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $project[0].zoteroSyncStatus = "pending"; $project[0].zoteroSyncMessage = "Abgleich mit dem lokalen Zotero-Plugin angefordert."; $project[0].updatedAt = (Get-Date).ToString("o")
     Save-ProjectStore $store
     return Get-ProjectSummary $project[0]
 }
@@ -310,7 +464,7 @@ function Set-ProjectDetails {
     $store = Get-ProjectStore
     $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
     if (-not $project) { throw "Projekt wurde nicht gefunden." }
-    foreach ($field in @("researchQuestion", "paperGoal", "abstract", "notes", "deadline", "outline")) {
+    foreach ($field in @("description", "hypothesis", "subject", "researchQuestion", "paperGoal", "abstract", "notes", "deadline", "outline")) {
         if (Test-BodyProperty $Body $field) { $project[0].$field = "$(Get-BodyValue $Body $field)".Trim() }
     }
     if (Test-BodyProperty $Body "name") {
@@ -319,9 +473,88 @@ function Set-ProjectDetails {
         $project[0].name = $name
     }
     if ("$(Get-BodyValue $Body 'status')" -in @("planning", "research", "writing", "review", "done")) { $project[0].status = "$(Get-BodyValue $Body 'status')" }
+    if ("$(Get-BodyValue $Body 'projectType')" -in @("term_paper", "seminar_paper", "paper", "research_project", "dissertation", "other")) { $project[0].projectType = "$(Get-BodyValue $Body 'projectType')" }
+    if ("$(Get-BodyValue $Body 'priority')" -in @("low", "normal", "high")) { $project[0].priority = "$(Get-BodyValue $Body 'priority')" }
+    if (Test-BodyProperty $Body "tags") { $project[0].tags = @("$(Get-BodyValue $Body 'tags')" -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique) }
+    if (Test-BodyProperty $Body "researchConcept" -and $null -ne $Body.researchConcept) {
+        foreach ($field in @("topic", "question", "relevance", "gap", "theory", "terms", "method", "sources", "contribution", "limits")) {
+            if ($null -ne $Body.researchConcept.PSObject.Properties[$field]) { $project[0].researchConcept.$field = "$(Get-BodyValue $Body.researchConcept $field)".Trim() }
+        }
+    }
     $project[0].updatedAt = (Get-Date).ToString("o")
     Save-ProjectStore $store
     return Get-ProjectSummary $project[0]
+}
+
+function Set-ProjectArchiveState {
+    param([string]$ProjectId, [bool]$Archived)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    if ($project[0].trashedAt) { throw "Ein Projekt im Papierkorb muss zuerst wiederhergestellt werden." }
+    $project[0].archivedAt = if ($Archived) { (Get-Date).ToString("o") } else { "" }
+    $project[0].updatedAt = (Get-Date).ToString("o")
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Restore-Project {
+    param([string]$ProjectId)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    $project[0].trashedAt = ""
+    $project[0].archivedAt = ""
+    $project[0].updatedAt = (Get-Date).ToString("o")
+    Save-ProjectStore $store
+    return Get-ProjectSummary $project[0]
+}
+
+function Move-ProjectToTrash {
+    param([string]$ProjectId)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    if (-not $project[0].trashedAt) { $project[0].trashedAt = (Get-Date).ToString("o") }
+    $project[0].archivedAt = ""
+    $project[0].updatedAt = (Get-Date).ToString("o")
+    Save-ProjectStore $store
+    return @{ id = $project[0].id; trashedAt = $project[0].trashedAt; filesKept = $true; zoteroItemsKept = $true }
+}
+
+function Get-ManagedProjectFolderPath {
+    param($Project)
+    $projectsRoot = Get-ProjectsRootPath
+    $candidate = [IO.Path]::GetFullPath((Join-Path $projectsRoot "$($Project.folderName)"))
+    $rootPrefix = $projectsRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $candidate.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Unsicherer Projektordner wurde blockiert." }
+    return $candidate
+}
+
+function Remove-ProjectPermanently {
+    param([string]$ProjectId, [bool]$DeleteProjectFiles = $false)
+    $store = Get-ProjectStore
+    $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { throw "Projekt wurde nicht gefunden." }
+    if (-not $project[0].trashedAt) { throw "Ein Projekt muss vor dem endgültigen Löschen zuerst im Papierkorb liegen." }
+    $projectFolder = Get-ManagedProjectFolderPath $project[0]
+    if ($DeleteProjectFiles -and (Test-Path -LiteralPath $projectFolder)) {
+        Remove-Item -LiteralPath $projectFolder -Recurse -Force
+    }
+    $store.projects = @($store.projects | Where-Object { $_.id -ne $ProjectId })
+    Save-ProjectStore $store
+    return @{ id = $ProjectId; projectDataDeleted = $true; projectFilesDeleted = $DeleteProjectFiles; preservedProjectFolder = if ($DeleteProjectFiles) { "" } else { $projectFolder }; zoteroItemsKept = $true }
+}
+
+function Copy-Project {
+    param([string]$ProjectId)
+    $source = Get-ProjectById $ProjectId
+    if ($source.trashedAt) { throw "Projekte im Papierkorb können nicht dupliziert werden." }
+    $copy = New-Project "$($source.name) - Kopie" ([PSCustomObject]@{
+        description = $source.description; hypothesis = $source.hypothesis; projectType = $source.projectType; subject = $source.subject; priority = $source.priority; tags = @($source.tags)
+        researchQuestion = $source.researchQuestion; paperGoal = $source.paperGoal; deadline = $source.deadline; status = "planning"
+    })
+    return $copy
 }
 
 function Invoke-ZoteroLocalApi {
@@ -719,7 +952,16 @@ function Handle-Api {
         }
         if ($Path -eq "/api/projects" -and $method -eq "GET") {
             $store = Get-ProjectStore
-            Send-Json $Context @($store.projects | ForEach-Object { Get-ProjectSummary $_ })
+            $scope = [string]$Context.Request.QueryString.Get("scope")
+            $projects = @($store.projects)
+            if ($scope -eq "trash") {
+                $projects = @($projects | Where-Object { $_.trashedAt })
+            } elseif ($scope -eq "archived") {
+                $projects = @($projects | Where-Object { -not $_.trashedAt -and $_.archivedAt })
+            } elseif ($scope -ne "all") {
+                $projects = @($projects | Where-Object { -not $_.trashedAt -and -not $_.archivedAt })
+            }
+            Send-Json $Context @($projects | ForEach-Object { Get-ProjectSummary $_ })
             return
         }
         if ($Path -eq "/api/projects" -and $method -eq "POST") {
@@ -733,6 +975,36 @@ function Handle-Api {
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})$" -and $method -eq "PATCH") {
             Send-Json $Context (Set-ProjectDetails $matches[1] (Read-JsonBody $Context.Request))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/archive$" -and $method -eq "POST") {
+            Send-Json $Context (Set-ProjectArchiveState $matches[1] $true)
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/restore$" -and $method -eq "POST") {
+            Send-Json $Context (Restore-Project $matches[1])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/duplicate$" -and $method -eq "POST") {
+            Send-Json $Context (Copy-Project $matches[1]) 201
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/zotero-collection$" -and $method -eq "POST") {
+            Send-Json $Context (Set-ProjectZoteroCollection $matches[1] (Read-JsonBody $Context.Request))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/zotero-collection/request$" -and $method -eq "POST") {
+            Send-Json $Context (Request-ProjectZoteroSync $matches[1])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})$" -and $method -eq "DELETE") {
+            $permanent = ([string]$Context.Request.QueryString.Get("permanent")) -eq "true"
+            if ($permanent) {
+                $deleteFiles = ([string]$Context.Request.QueryString.Get("deleteProjectFiles")) -eq "true"
+                Send-Json $Context (Remove-ProjectPermanently $matches[1] $deleteFiles)
+            } else {
+                Send-Json $Context (Move-ProjectToTrash $matches[1])
+            }
             return
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/references$" -and $method -eq "POST") {
@@ -754,6 +1026,18 @@ function Handle-Api {
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/(todos|tasks)/([a-f0-9]{32})/github-issue$" -and $method -eq "POST") {
             Send-Json $Context (Publish-ProjectTodoIssue $matches[1] $matches[3])
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/(todos|tasks)/([a-f0-9]{32})/comments$" -and $method -eq "POST") {
+            Send-Json $Context (Add-ProjectTodoComment $matches[1] $matches[3] (Read-JsonBody $Context.Request))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/(todos|tasks)/([a-f0-9]{32})/checklist$" -and $method -eq "POST") {
+            Send-Json $Context (Add-ProjectTodoChecklistItem $matches[1] $matches[3] (Read-JsonBody $Context.Request))
+            return
+        }
+        if ($Path -match "^/api/projects/([a-f0-9]{32})/(todos|tasks)/([a-f0-9]{32})/checklist/([a-f0-9]{32})$" -and $method -eq "PATCH") {
+            Send-Json $Context (Set-ProjectTodoChecklistItem $matches[1] $matches[3] $matches[4] (Read-JsonBody $Context.Request))
             return
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/(todos|tasks)/([a-f0-9]{32})$" -and $method -eq "PATCH") {
