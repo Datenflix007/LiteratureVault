@@ -574,8 +574,8 @@ function renderRepositoryGraph() {
     ? state.repositoryGraphSelectedCommit
     : nodes[0].hash;
   const selected = nodeByHash.get(selectedHash);
-  const laneWidth = 36;
-  const rowHeight = 52;
+  const laneWidth = 28;
+  const rowHeight = 44;
   const maxLane = Math.max(0, ...nodes.map((node) => node.lane));
   const graphWidth = Math.max(720, (maxLane + 1) * laneWidth + 590);
   const graphHeight = Math.max(116, nodes.length * rowHeight + 26);
@@ -587,13 +587,13 @@ function renderRepositoryGraph() {
     const y1 = 27 + node.row * rowHeight;
     const x2 = 28 + parent.lane * laneWidth;
     const y2 = 27 + parent.row * rowHeight;
-    const bend = Math.max(x1, x2) + 16;
-    return '<path style="--graph-color:' + laneColor(node.lane) + '" d="M ' + x1 + ' ' + y1 + ' C ' + bend + ' ' + y1 + ', ' + bend + ' ' + y2 + ', ' + x2 + ' ' + y2 + '" />';
+    return '<path style="--graph-color:' + laneColor(node.lane) + '" d="M ' + x1 + ' ' + y1 + ' V ' + y2 + ' H ' + x2 + '" />';
   })).join('');
   const nodeButtons = nodes.map((node) => {
     const refs = (node.refs || []).map((ref) => '<span class="repository-ref">' + esc(ref) + '</span>').join('');
     const merge = (node.parents || []).length > 1;
-    return '<button type="button" class="repository-node' + (node.hash === selectedHash ? ' selected' : '') + (merge ? ' merge' : '') + '" data-repository-commit="' + esc(node.hash) + '" style="--repository-x:' + (28 + node.lane * laneWidth) + 'px;--repository-y:' + (27 + node.row * rowHeight) + 'px;--graph-color:' + laneColor(node.lane) + '" title="' + esc(node.hash) + '"><span class="repository-node-dot"></span><span class="repository-node-copy"><strong>' + esc(node.subject || '(ohne Nachricht)') + '</strong><small>' + esc(node.short) + ' · ' + esc(node.author || '') + ' · ' + esc(formatDate(node.date)) + '</small></span>' + (refs ? '<span class="repository-refs">' + refs + '</span>' : '') + '</button>';
+    const initials = String(node.author || '?').trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+    return '<button type="button" class="repository-node' + (node.hash === selectedHash ? ' selected' : '') + (merge ? ' merge' : '') + '" data-repository-commit="' + esc(node.hash) + '" style="--repository-x:' + (28 + node.lane * laneWidth) + 'px;--repository-y:' + (27 + node.row * rowHeight) + 'px;--graph-color:' + laneColor(node.lane) + '" title="' + esc(node.hash) + '"><span class="repository-node-dot"></span><span class="repository-avatar" aria-hidden="true">' + esc(initials || '?') + '</span><span class="repository-node-copy"><strong>' + esc(node.subject || '(ohne Nachricht)') + '</strong><small>' + esc(node.author || '') + ' · ' + esc(formatDate(node.date)) + '</small></span><code class="repository-short">' + esc(node.short) + '</code>' + (refs ? '<span class="repository-refs">' + refs + '</span>' : '') + '</button>';
   }).join('');
   const selectedDetail = selected
     ? '<div class="repository-selected"><span class="repository-selected-dot" style="--graph-color:' + laneColor(selected.lane) + '"></span><div><span>Ausgewählter Commit</span><strong>' + esc(selected.subject || '(ohne Nachricht)') + '</strong><small>' + esc(selected.short) + ' · ' + esc(selected.author || '') + ' · ' + esc(formatDate(selected.date)) + '</small></div><code>' + esc(selected.hash) + '</code></div>'

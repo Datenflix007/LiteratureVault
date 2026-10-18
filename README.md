@@ -140,31 +140,68 @@ seine Anhänge werden dabei nicht kopiert oder gelöscht.
 
 ### Relevanzscore: Formel und Grenzen
 
-Der Relevanzscore ist ein deterministischer Wert von 0 bis 100 und **keine
-statistische Trefferwahrscheinlichkeit**. Er nutzt nur direkte, normalisierte
-Wortübereinstimmungen zwischen dem Projektprofil (Forschungsfrage, These,
-Schlagwörter, Begriffe, Fachgebiet und Suchanfrage) und den tatsächlich
-verfügbaren Metadaten des Treffers.
+Der Relevanzscore ist ein deterministischer Wert zwischen 0 und 100 und **keine
+statistische Trefferwahrscheinlichkeit**. Er verwendet ausschließlich direkte,
+normalisierte Wortübereinstimmungen zwischen dem Projektprofil
+(Forschungsfrage, These, Schlagwörter, Begriffe, Fachgebiet und Suchanfrage)
+und tatsächlich verfügbaren Metadaten des Treffers.
 
-Für jedes verfügbare Feld wird zunächst eine Feldübereinstimmung `m_f` von
-0–100 berechnet. Sie entspricht dem Anteil der Profilbegriffe, die im Feld
-vorkommen; als wichtig konfigurierte Begriffe zählen doppelt. Danach gilt:
+| Variable | Bedeutung |
+| --- | --- |
+| $r$ | betrachteter Treffer |
+| $f$ | Metadatenfeld: Titel, Abstract, Schlagwörter oder Projektkontext |
+| $P$ | normalisierte Tokenfolge aus dem Projektprofil; Wiederholungen bleiben erhalten |
+| $D_f(r)$ | Menge der normalisierten Begriffe im Feld $f$ des Treffers $r$ |
+| $I$ | Menge der im Projekt als wichtig markierten Begriffe |
+| $a(t)$ | Gewicht eines Profilbegriffs $t$: $2$ für $t \in I$, sonst $1$ |
+| $m_f(r)$ | Übereinstimmung des Feldes $f$ in Prozent |
+| $w_f$ | Gewicht des Feldes $f$ |
+| $\mathcal{F}(r)$ | Menge der bei $r$ vorhandenen, nicht leeren Metadatenfelder |
+| $S(r)$ | angezeigter Relevanzscore des Treffers $r$ |
 
-```text
-Score = round( Σ(w_f × m_f) / Σ(w_f für vorhandene Felder) )
-```
+Für jedes vorhandene Feld wird zunächst der gewichtete Anteil der
+Profilbegriffe berechnet. $\mathbf{1}_{D_f(r)}(t)$ ist dabei $1$, wenn der
+Begriff $t$ im jeweiligen Feld vorkommt, andernfalls $0$:
 
-Die Standardgewichte sind Titel `30`, Abstract `40`, Schlagwörter `20` und
-Projektkontext `10`. „Projektkontext“ vergleicht Profilbegriffe mit vorhandenen
-Kontextmetadaten des Treffers (Dokumenttyp und Verlag), nicht mit einem
-hinzuerfundenen Inhalt. Fehlende Felder werden offen genannt und aus dem
-Nenner entfernt.
+$$
+m_f(r) =
+\begin{cases}
+\operatorname{round}_{0{,}1}\!\left(100 \cdot \dfrac{\sum\limits_{t \in P} a(t) \cdot \mathbf{1}_{D_f(r)}(t)}{\sum\limits_{t \in P} a(t)}\right), & \text{falls } P \ne \varnothing, \\
+0, & \text{falls } P = \varnothing.
+\end{cases}
+$$
 
-Beispiel: Titel `50 %`, Abstract `25 %`, Schlagwörter fehlen und
-Projektkontext `0 %` bei den Standardgewichten ergibt
-`round((30×50 + 40×25 + 10×0) / (30+40+10)) = 31`. Die aufklappbare
-Begründung jeder Trefferkarte zeigt die tatsächlich gefundenen Begriffe,
-Feldwerte, verwendeten Gewichte und fehlenden Metadaten.
+Aus diesen Feldwerten ergibt sich der Score. Leere Metadatenfelder gehören
+nicht zu $\mathcal{F}(r)$ und werden damit transparent aus dem Nenner entfernt:
+
+$$
+S(r) =
+\begin{cases}
+\operatorname{round}_{0}\!\left(\dfrac{\sum\limits_{f \in \mathcal{F}(r)} w_f \cdot m_f(r)}{\sum\limits_{f \in \mathcal{F}(r)} w_f}\right), & \text{falls } \mathcal{F}(r) \ne \varnothing \text{ und ein Projektprofil vorliegt}, \\
+0, & \text{sonst}.
+\end{cases}
+$$
+
+Die Standardgewichte sind
+$w_{\mathrm{Titel}} = 30$, $w_{\mathrm{Abstract}} = 40$,
+$w_{\mathrm{Schlagwörter}} = 20$ und $w_{\mathrm{Projektkontext}} = 10$.
+Der Projektkontext besteht ausschließlich aus vorhandenem Dokumenttyp und
+Verlag; es wird kein zusätzlicher Inhalt hinzuerfunden. Die Schreibweise
+$\operatorname{round}_{0{,}1}$ steht für die Rundung auf eine Nachkommastelle,
+$\operatorname{round}_{0}$ für die Rundung auf eine ganze Zahl.
+
+**Beispiel.** Für $m_{\mathrm{Titel}}(r) = 50\,\%$,
+$m_{\mathrm{Abstract}}(r) = 25\,\%$,
+fehlende Schlagwörter und $m_{\mathrm{Projektkontext}}(r) = 0\,\%$ gilt:
+
+$$
+S(r) = \operatorname{round}_{0}\!\left(
+\dfrac{30 \cdot 50 + 40 \cdot 25 + 10 \cdot 0}{30 + 40 + 10}
+\right) = \operatorname{round}_{0}(31{,}25) = 31.
+$$
+
+Die aufklappbare Begründung jeder Trefferkarte zeigt die tatsächlich
+gefundenen Begriffe, Feldwerte, verwendeten Gewichte und fehlenden Metadaten.
 
 ### Treffer merken und nach Zotero übernehmen
 
