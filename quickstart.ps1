@@ -407,6 +407,14 @@ function Start-WebDav {
     $upOut = @()
     $containerState = "nicht vorhanden"
     for ($attempt = 1; $attempt -le $WebDavComposeMaxAttempts; $attempt++) {
+        # Docker Desktop restarts containers with `restart: unless-stopped` in
+        # parallel to this script. After the short retry pause, prefer the
+        # already restored service over another competing `compose up` call.
+        if ($attempt -gt 1 -and (Test-WebDavReady)) {
+            Write-Ok "WebDAV wurde waehrend des Docker-Starts bereit"
+            return
+        }
+
         $composeResult = Invoke-WebDavComposeUp
         $upOut = @($composeResult.Output)
         if ($composeResult.ExitCode -eq 0) {
