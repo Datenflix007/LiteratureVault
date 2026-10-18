@@ -4,7 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LiteratureVault</title>
-  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <meta name="theme-color" content="#080d14" id="themeColor">
+  <link rel="icon" type="image/svg+xml" href="assets/branding/icon-dark.svg" id="siteFavicon">
+  <link rel="alternate icon" href="assets/branding/favicon.ico" sizes="any">
+  <link rel="apple-touch-icon" href="assets/branding/apple-touch-icon.png">
+  <script>
+    document.documentElement.dataset.theme = localStorage.getItem("myliteraturevault.theme") === "light" ? "light" : "dark";
+  </script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -12,7 +18,7 @@
     <div class="brand">
       <div class="vault-wordmark-wrap">
         <div class="vault-wordmark" aria-label="Literature Vault">
-          <h1>Literature <span>Vault</span></h1>
+          <img id="brandWordmark" src="assets/branding/wordmark-dark.svg" alt="LiteratureVault">
         </div>
         <p class="sr-only" id="viewEyebrow">FORSCHEN · ORDNEN · SCHREIBEN</p>
         <p class="sr-only" id="viewTitle">Forschungsübersicht</p>
@@ -32,6 +38,7 @@
       <div id="sidebarProjects"></div>
     </section>
     <div class="sidebar-footer">
+      <button id="themeToggle" class="theme-switch" type="button" role="switch" aria-checked="false" title="Zum hellen Design wechseln"><span class="theme-switch-track" aria-hidden="true"><span></span></span><span id="themeToggleLabel">Helles Design</span></button>
       <button id="pullBtn" type="button">Code pullen</button>
       <button id="commitBtn" type="button">Code committen</button>
       <button id="settingsBtn" type="button">Speicher &amp; Dienste</button>

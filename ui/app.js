@@ -30,9 +30,22 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 const API_BASE = location.protocol === "http:" || location.protocol === "https:" ? "" : "http://localhost:8765";
+const themeStorageKey = "myliteraturevault.theme";
 const phaseLabels = { planning: "Konzept", research: "Recherche", writing: "Schreiben", review: "Überarbeitung", done: "Abgeschlossen" };
 const taskStatusLabels = { open: "Offen", in_progress: "In Arbeit", blocked: "Blockiert", done: "Erledigt" };
 const priorityLabels = { high: "Hoch", normal: "Normal", low: "Niedrig" };
+
+function applyTheme(theme, { persist = true } = {}) {
+  const activeTheme = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = activeTheme;
+  if (persist) localStorage.setItem(themeStorageKey, activeTheme);
+  $("brandWordmark").src = "assets/branding/wordmark-" + activeTheme + ".svg";
+  $("siteFavicon").href = "assets/branding/icon-" + activeTheme + ".svg";
+  $("themeColor").content = activeTheme === "light" ? "#f6f7f8" : "#080d14";
+  $("themeToggle").setAttribute("aria-checked", String(activeTheme === "light"));
+  $("themeToggle").title = activeTheme === "light" ? "Zum dunklen Design wechseln" : "Zum hellen Design wechseln";
+  $("themeToggleLabel").textContent = activeTheme === "light" ? "Dunkles Design" : "Helles Design";
+}
 
 async function api(path, options = {}) {
   const response = await fetch(API_BASE + path, {
@@ -1340,6 +1353,8 @@ $("commitBtn").addEventListener("click", openCommitDialog);
 $("commitForm").addEventListener("submit", (event) => doManualCommit(event).catch((error) => toast(error.message, "error")));
 $("stopServerBtn").addEventListener("click", () => stopServer().catch((error) => toast(error.message, "error")));
 $("sidebarToggle").addEventListener("click", () => document.body.classList.toggle("sidebar-collapsed"));
+applyTheme(localStorage.getItem(themeStorageKey));
+$("themeToggle").addEventListener("click", () => applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"));
 
 window.setInterval(() => {
   const project = projectById();
