@@ -24,7 +24,7 @@ function Import-EnvFile {
 
 function Save-EnvFile {
     param([hashtable]$Values)
-    $orderedKeys = @("GITHUB_USERNAME", "GITHUB_EMAIL", "GITHUB_TOKEN", "WEBDAV_URL", "WEBDAV_USERNAME", "WEBDAV_PASSWORD", "STORAGE_PROVIDER", "ZOTERO_STORAGE_PATH", "STORAGE_SHARE_URL")
+    $orderedKeys = @("GITHUB_USERNAME", "GITHUB_EMAIL", "GITHUB_TOKEN", "WEBDAV_URL", "WEBDAV_USERNAME", "WEBDAV_PASSWORD", "STORAGE_PROVIDER", "ZOTERO_STORAGE_PATH", "STORAGE_SHARE_URL", "SYNC_INTERVAL_SECONDS", "DDB_API_KEY", "EUROPEANA_API_KEY", "JSTOR_SRU_URL", "BASE_OAI_ENABLED")
     $lines = @("# GitHub Configuration")
     foreach ($key in @("GITHUB_USERNAME", "GITHUB_EMAIL", "GITHUB_TOKEN")) {
         $lines += "$key=$($Values[$key])"
@@ -36,7 +36,12 @@ function Save-EnvFile {
     }
     $lines += ""
     $lines += "# External attachment storage (the desktop sync client writes this folder to the cloud)"
-    foreach ($key in @("STORAGE_PROVIDER", "ZOTERO_STORAGE_PATH", "STORAGE_SHARE_URL")) {
+    foreach ($key in @("STORAGE_PROVIDER", "ZOTERO_STORAGE_PATH", "STORAGE_SHARE_URL", "SYNC_INTERVAL_SECONDS")) {
+        $lines += "$key=$($Values[$key])"
+    }
+    $lines += ""
+    $lines += "# Optional research-provider credentials (kept local; never committed)"
+    foreach ($key in @("DDB_API_KEY", "EUROPEANA_API_KEY", "JSTOR_SRU_URL", "BASE_OAI_ENABLED")) {
         $lines += "$key=$($Values[$key])"
     }
     foreach ($key in $Values.Keys) {
@@ -62,6 +67,51 @@ function Ensure-StorageRoot {
     $projectsPath = Join-Path $path "Projekte"
     if (-not (Test-Path -LiteralPath $projectsPath)) { New-Item -ItemType Directory -Path $projectsPath -Force | Out-Null }
     return $path
+}
+
+function Get-StorageSyncIntervalSeconds {
+    param([hashtable]$EnvValues = (Import-EnvFile))
+    $interval = 60
+    [void][int]::TryParse("$($EnvValues['SYNC_INTERVAL_SECONDS'])", [ref]$interval)
+    return [math]::Max(5, [math]::Min(3600, $interval))
+}
+
+function Start-OneDriveClientIfNeeded {
+    if (Get-Process -Name 'OneDrive' -ErrorAction SilentlyContinue) { return $false }
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\OneDrive.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft OneDrive\OneDrive.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft OneDrive\OneDrive.exe')
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    if (-not $candidates) { return $false }
+    try {
+        Start-Process -FilePath $candidates[0] -ArgumentList '/background' -WindowStyle Hidden -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Warning "OneDrive konnte nicht gestartet werden: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Invoke-StorageSynchronization {
+    $env = Import-EnvFile
+    $path = Ensure-StorageRoot $env
+    $provider = if ("$($env['STORAGE_PROVIDER'])".Trim()) { "$($env['STORAGE_PROVIDER'])".Trim().ToLowerInvariant() } else { 'local' }
+    $clientStarted = $false
+    $oneDriveRunning = $false
+    if ($provider -eq 'onedrive') {
+        $oneDriveRunning = [bool](Get-Process -Name 'OneDrive' -ErrorAction SilentlyContinue)
+        if (-not $oneDriveRunning) { $clientStarted = Start-OneDriveClientIfNeeded }
+    }
+    $files = @(Get-ChildItem -LiteralPath $path -Force -Recurse -File -ErrorAction SilentlyContinue)
+    $newest = @($files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+    $message = switch ($provider) {
+        'onedrive' { if ($clientStarted) { 'OneDrive wurde gestartet und gleicht den lokalen Speicher nun ab.' } elseif ($oneDriveRunning) { 'OneDrive gleicht den lokalen Speicher im Hintergrund ab.' } else { 'OneDrive konnte nicht gestartet werden. Bitte den OneDrive-Client öffnen.' } }
+        'nextcloud' { 'Nextcloud Desktop gleicht den lokalen Speicher im Hintergrund ab.' }
+        'dropbox' { 'Dropbox gleicht den lokalen Speicher im Hintergrund ab.' }
+        default { 'Lokalen Speicher geprüft.' }
+    }
+    return @{ ok = $true; provider = $provider; path = $path; fileCount = $files.Count; newestChangeAt = if ($newest) { $newest[0].LastWriteTimeUtc.ToString('o') } else { '' }; clientStarted = $clientStarted; message = $message }
 }
 
 function Get-ProjectStorePath {
@@ -1380,13 +1430,37 @@ function Get-Status {
     $storagePath = Get-StoragePath $env
     $ahead = 0
     $behind = 0
-    $counts = (git rev-list --left-right --count HEAD...@{u} 2>$null)
+    $counts = (git rev-list --left-right --count 'HEAD...@{upstream}' 2>$null)
     if ($LASTEXITCODE -eq 0 -and $counts) {
         $parts = "$counts".Trim() -split "\s+"
         $ahead = [int]$parts[0]
         $behind = [int]$parts[1]
     }
-    return @{ repo = $repo; branch = $branch; short = $short; dirty = -not [string]::IsNullOrWhiteSpace($porcelain); ahead = $ahead; behind = $behind; storage = @{ provider = if ($env["STORAGE_PROVIDER"]) { $env["STORAGE_PROVIDER"] } else { "local" }; path = $storagePath; shareUrl = $env["STORAGE_SHARE_URL"]; available = Test-Path -LiteralPath $storagePath } }
+    return @{ repo = $repo; branch = $branch; short = $short; dirty = -not [string]::IsNullOrWhiteSpace($porcelain); ahead = $ahead; behind = $behind; storage = @{ provider = if ($env["STORAGE_PROVIDER"]) { $env["STORAGE_PROVIDER"] } else { "local" }; path = $storagePath; shareUrl = $env["STORAGE_SHARE_URL"]; available = Test-Path -LiteralPath $storagePath; syncIntervalSeconds = Get-StorageSyncIntervalSeconds $env } }
+}
+
+function Get-CodeUpdateStatus {
+    $branch = "$(git branch --show-current 2>$null)".Trim()
+    $localHash = "$(git rev-parse HEAD 2>$null)".Trim()
+    $upstream = "$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>$null)".Trim()
+    if (-not $branch -or -not $localHash -or -not $upstream) {
+        return @{ checked = $false; updateAvailable = $false; message = 'Kein Git-Upstream für diesen Code-Stand konfiguriert.' }
+    }
+
+    $fetch = Invoke-GitRemote @('fetch', '--quiet', '--prune')
+    if ($fetch.exitCode -ne 0) {
+        return @{ checked = $false; updateAvailable = $false; message = 'Remote-Code-Stand konnte nicht geprüft werden.'; details = $fetch.output }
+    }
+
+    $remoteHash = "$(git rev-parse '@{upstream}' 2>$null)".Trim()
+    $counts = "$(git rev-list --left-right --count 'HEAD...@{upstream}' 2>$null)".Trim() -split '\s+'
+    $ahead = if ($counts.Count -ge 1 -and $counts[0] -match '^\d+$') { [int]$counts[0] } else { 0 }
+    $behind = if ($counts.Count -ge 2 -and $counts[1] -match '^\d+$') { [int]$counts[1] } else { 0 }
+    return @{
+        checked = $true; updateAvailable = $behind -gt 0; branch = $branch; upstream = $upstream
+        localHash = $localHash; remoteHash = $remoteHash; ahead = $ahead; behind = $behind
+        message = if ($behind -gt 0) { "$behind neuer Code-Commit$(if ($behind -eq 1) { '' } else { 's' }) verfügbar." } else { 'Code-Stand ist aktuell.' }
+    }
 }
 
 function Get-Log {
@@ -1554,6 +1628,7 @@ function Handle-Api {
         $method = $Context.Request.HttpMethod
         if ($method -eq "OPTIONS") { Send-Response $Context 204 "" "text/plain"; return }
         if ($Path -eq "/api/status") { Send-Json $Context (Get-Status); return }
+        if ($Path -eq "/api/code-update" -and $method -eq "GET") { Send-Json $Context (Get-CodeUpdateStatus); return }
         if ($Path -eq "/api/log") { Send-Json $Context (Get-Log); return }
         if ($Path -eq "/api/project-graph" -and $method -eq "GET") { Send-Json $Context (Get-ProjectGraphPayload); return }
         if ($Path -eq "/api/zotero/status" -and $method -eq "GET") { Send-Json $Context (Get-ZoteroStatus); return }
@@ -1564,6 +1639,7 @@ function Handle-Api {
             return
         }
         if ($Path -eq "/api/pull" -and $method -eq "POST") { Send-Json $Context (Pull-RemoteUpdates); return }
+        if ($Path -eq "/api/storage/sync" -and $method -eq "POST") { Send-Json $Context (Invoke-StorageSynchronization); return }
         if ($Path -eq "/api/settings" -and $method -eq "GET") {
             $env = Import-EnvFile
             Send-Json $Context @{
@@ -1576,6 +1652,11 @@ function Handle-Api {
                 storageProvider = if ($env["STORAGE_PROVIDER"]) { $env["STORAGE_PROVIDER"] } else { "local" }
                 storagePath = Get-StoragePath $env
                 storageShareUrl = $env["STORAGE_SHARE_URL"]
+                syncIntervalSeconds = Get-StorageSyncIntervalSeconds $env
+                ddbApiKeySet = -not [string]::IsNullOrWhiteSpace($env["DDB_API_KEY"])
+                europeanaApiKeySet = -not [string]::IsNullOrWhiteSpace($env["EUROPEANA_API_KEY"])
+                jstorSruUrl = $env["JSTOR_SRU_URL"]
+                baseOaiEnabled = "$($env["BASE_OAI_ENABLED"])".Trim().ToLowerInvariant() -in @('1', 'true', 'yes', 'ja')
             }
             return
         }
@@ -1585,17 +1666,24 @@ function Handle-Api {
             if ($body.PSObject.Properties.Name -contains "githubUsername") { $env["GITHUB_USERNAME"] = "$($body.githubUsername)" }
             if ($body.PSObject.Properties.Name -contains "githubEmail") { $env["GITHUB_EMAIL"] = "$($body.githubEmail)" }
             if (($body.PSObject.Properties.Name -contains "githubToken") -and -not [string]::IsNullOrWhiteSpace("$($body.githubToken)")) { $env["GITHUB_TOKEN"] = "$($body.githubToken)" }
+            if (($body.PSObject.Properties.Name -contains "ddbApiKey") -and -not [string]::IsNullOrWhiteSpace("$($body.ddbApiKey)")) { $env["DDB_API_KEY"] = "$($body.ddbApiKey)" }
+            if (($body.PSObject.Properties.Name -contains "europeanaApiKey") -and -not [string]::IsNullOrWhiteSpace("$($body.europeanaApiKey)")) { $env["EUROPEANA_API_KEY"] = "$($body.europeanaApiKey)" }
+            if ($body.PSObject.Properties.Name -contains "jstorSruUrl") { $env["JSTOR_SRU_URL"] = "$($body.jstorSruUrl)".Trim() }
+            if ($body.PSObject.Properties.Name -contains "baseOaiEnabled") { $env["BASE_OAI_ENABLED"] = if ([bool]$body.baseOaiEnabled) { 'true' } else { 'false' } }
             $env["WEBDAV_URL"] = "$($body.webdavUrl)"
             $env["WEBDAV_USERNAME"] = "$($body.webdavUsername)"
             $env["WEBDAV_PASSWORD"] = "$($body.webdavPassword)"
             $env["STORAGE_PROVIDER"] = "$($body.storageProvider)"
             $env["ZOTERO_STORAGE_PATH"] = "$($body.storagePath)"
             $env["STORAGE_SHARE_URL"] = "$($body.storageShareUrl)"
+            $syncIntervalSeconds = 60
+            if ($body.PSObject.Properties.Name -contains "syncIntervalSeconds") { [void][int]::TryParse("$($body.syncIntervalSeconds)", [ref]$syncIntervalSeconds) }
+            $env["SYNC_INTERVAL_SECONDS"] = [math]::Max(5, [math]::Min(3600, $syncIntervalSeconds))
             $storagePath = Ensure-StorageRoot $env
             Save-EnvFile $env
             if ($env["GITHUB_USERNAME"]) { git config user.name "$($env["GITHUB_USERNAME"])" | Out-Null }
             if ($env["GITHUB_EMAIL"]) { git config user.email "$($env["GITHUB_EMAIL"])" | Out-Null }
-            Send-Json $Context @{ ok = $true; storagePath = $storagePath; restartRequired = $true }
+            Send-Json $Context @{ ok = $true; storagePath = $storagePath; syncIntervalSeconds = Get-StorageSyncIntervalSeconds $env; restartRequired = $true }
             return
         }
         if ($Path -eq "/api/sync-log") {
@@ -1874,12 +1962,21 @@ if ($OpenBrowser) { Start-Process $prefix }
 
 try {
     while ($script:listener.IsListening) {
+        $context = $null
         try {
             $context = $script:listener.GetContext()
             $path = $context.Request.Url.AbsolutePath
             if ($path.StartsWith("/api/")) { Handle-Api $context $path } else { Serve-File $context $path }
         } catch [System.Net.HttpListenerException] {
-            break
+            # Ein abgebrochener Browser-Request darf den lokalen Server nicht
+            # beenden. Nur ein gezielt gestoppter Listener beendet die Schleife.
+            if (-not $script:listener.IsListening) { break }
+            Write-Warning "Eine UI-Anfrage wurde vorzeitig getrennt; der Server läuft weiter."
+        } catch {
+            Write-Warning "UI-Anfrage konnte nicht verarbeitet werden: $($_.Exception.Message)"
+            if ($context -and $context.Response) {
+                try { $context.Response.Abort() } catch { }
+            }
         }
     }
 }

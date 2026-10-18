@@ -1,7 +1,7 @@
 ﻿#!/usr/bin/env powershell
 param(
     [string]$WatchPath = "",
-    [int]$IntervalSeconds = 5
+    [int]$IntervalSeconds = 0
 )
 
 # This is intentionally only an activity monitor. The OneDrive/Nextcloud/Dropbox
@@ -33,17 +33,28 @@ function Get-ConfiguredStoragePath {
     return (Join-Path $ScriptDir $script:configuredPath)
 }
 
+function Get-ConfiguredIntervalSeconds {
+    if ($IntervalSeconds -ge 5) { return $IntervalSeconds }
+    $configuredInterval = 60
+    if (Test-Path (Join-Path $ScriptDir ".env")) {
+        Get-Content (Join-Path $ScriptDir ".env") -Encoding UTF8 | ForEach-Object {
+            if ($_.Trim() -match '^SYNC_INTERVAL_SECONDS=(\d+)$') { $configuredInterval = [int]$matches[1] }
+        }
+    }
+    return [math]::Max(5, [math]::Min(3600, $configuredInterval))
+}
+
 if ([string]::IsNullOrWhiteSpace($WatchPath)) { $WatchPath = Get-ConfiguredStoragePath }
 if (-not (Test-Path -LiteralPath $WatchPath)) { New-Item -ItemType Directory -Path $WatchPath -Force | Out-Null }
 $WatchPath = (Resolve-Path -LiteralPath $WatchPath).Path
 
-Write-Log "Speicher-Monitor gestartet. Cloud-Synchronisierung ueber den Desktop-Client; keine Git-Commits fuer Anhaenge." "ok"
+Write-Log "Speicher-Monitor gestartet (Prüfung alle $(Get-ConfiguredIntervalSeconds) Sekunden). Cloud-Synchronisierung ueber den Desktop-Client; keine Git-Commits fuer Anhaenge." "ok"
 Write-Log "Ueberwache: $WatchPath" "info"
 $lastStamp = (Get-ChildItem -LiteralPath $WatchPath -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object LastWriteTimeUtc -Maximum).Maximum
 
 try {
     while ($true) {
-        Start-Sleep -Seconds $IntervalSeconds
+        Start-Sleep -Seconds (Get-ConfiguredIntervalSeconds)
         $currentStamp = (Get-ChildItem -LiteralPath $WatchPath -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object LastWriteTimeUtc -Maximum).Maximum
         if ($currentStamp -and $currentStamp -ne $lastStamp) {
             $lastStamp = $currentStamp

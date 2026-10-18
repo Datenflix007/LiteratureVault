@@ -26,7 +26,8 @@ const state = {
   historySelectedCommit: {},
   projectGraph: null,
   projectGraphSelectedEvent: "",
-  zoteroImportDraft: null
+  zoteroImportDraft: null,
+  codeUpdateCheckRunning: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -76,6 +77,31 @@ function toast(message, kind = "") {
   target.className = "show " + kind;
   window.clearTimeout(toast.timer);
   toast.timer = window.setTimeout(() => { target.className = ""; }, 4200);
+}
+
+function renderCodeUpdateNotice(update) {
+  const notice = $("codeUpdateNotice");
+  if (!update?.checked || !update.updateAvailable) {
+    notice.hidden = true;
+    return;
+  }
+  const localHash = String(update.localHash || "").slice(0, 7);
+  const remoteHash = String(update.remoteHash || "").slice(0, 7);
+  $("codeUpdateMessage").textContent = (update.behind || 1) + " Commit" + (update.behind === 1 ? "" : "s") + " neuer · " + localHash + " → " + remoteHash;
+  notice.title = "Lokaler Commit: " + (update.localHash || "unbekannt") + "\nRemote-Commit: " + (update.remoteHash || "unbekannt");
+  notice.hidden = false;
+}
+
+async function checkCodeUpdate() {
+  if (state.codeUpdateCheckRunning) return;
+  state.codeUpdateCheckRunning = true;
+  try {
+    renderCodeUpdateNotice(await api("/api/code-update"));
+  } catch {
+    // Offline oder ohne Remote: Die normale Nutzung bleibt unbeeinträchtigt.
+  } finally {
+    state.codeUpdateCheckRunning = false;
+  }
 }
 
 function formatDate(value) {
@@ -1286,6 +1312,8 @@ async function openSettings() {
   $("storageProvider").value = settings.storageProvider || "onedrive";
   $("storagePath").value = settings.storagePath || "";
   $("storageShareUrl").value = settings.storageShareUrl || "";
+  const savedSyncInterval = String(settings.syncIntervalSeconds || 60);
+  $("syncIntervalSeconds").value = Array.from($("syncIntervalSeconds").options).some((option) => option.value === savedSyncInterval) ? savedSyncInterval : "60";
   $("githubUsername").value = settings.githubUsername || "";
   $("githubEmail").value = settings.githubEmail || "";
   $("githubToken").value = "";
@@ -1293,6 +1321,12 @@ async function openSettings() {
   $("webdavUrl").value = settings.webdavUrl || "http://localhost:8080";
   $("webdavUsername").value = settings.webdavUsername || "zotero";
   $("webdavPassword").value = settings.webdavPassword || "";
+  $("ddbApiKey").value = "";
+  $("europeanaApiKey").value = "";
+  $("ddbApiKeyHint").textContent = settings.ddbApiKeySet ? "Ein DDB-API-Schlüssel ist lokal gespeichert." : "Noch kein DDB-API-Schlüssel gespeichert.";
+  $("europeanaApiKeyHint").textContent = settings.europeanaApiKeySet ? "Ein Europeana-API-Schlüssel ist lokal gespeichert." : "Noch kein Europeana-API-Schlüssel gespeichert.";
+  $("jstorSruUrl").value = settings.jstorSruUrl || "";
+  $("baseOaiEnabled").checked = !!settings.baseOaiEnabled;
   $("settingsDialog").showModal();
 }
 
@@ -1304,22 +1338,42 @@ async function saveSettings(event) {
     storageProvider: $("storageProvider").value,
     storagePath,
     storageShareUrl: $("storageShareUrl").value.trim(),
+    syncIntervalSeconds: $("syncIntervalSeconds").value,
     githubUsername: $("githubUsername").value.trim(),
     githubEmail: $("githubEmail").value.trim(),
     githubToken: $("githubToken").value,
+    ddbApiKey: $("ddbApiKey").value,
+    europeanaApiKey: $("europeanaApiKey").value,
+    jstorSruUrl: $("jstorSruUrl").value.trim(),
+    baseOaiEnabled: $("baseOaiEnabled").checked,
     webdavUrl: $("webdavUrl").value.trim(),
     webdavUsername: $("webdavUsername").value.trim(),
     webdavPassword: $("webdavPassword").value
   }) });
   $("settingsDialog").close();
-  toast("Gespeichert. WebDAV über quickstart.bat neu starten, falls sich der Ordner geändert hat.");
-  await Promise.all([loadStatus(), loadProjects()]);
+  toast("Gespeichert. Neue Recherche-Anbieter sind sofort verfügbar.");
+  await Promise.all([loadStatus(), loadProjects(), loadResearchProviders()]);
 }
 
 async function pullRemote() {
   const result = await api("/api/pull", { method: "POST", body: "{}" });
   toast(result.skipped ? result.reason : result.pulled ? "Code-Pull abgeschlossen." : "Code-Pull fehlgeschlagen.", result.pulled ? "" : "error");
-  await Promise.all([loadStatus(), loadActivity().catch(() => {})]);
+  await Promise.all([loadStatus(), loadActivity().catch(() => {}), checkCodeUpdate()]);
+}
+
+async function synchronizeStorage() {
+  const button = $("storageSyncBtn");
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Speicher wird abgeglichen …";
+  try {
+    const result = await api("/api/storage/sync", { method: "POST", body: "{}" });
+    toast(`${result.message} ${result.fileCount || 0} lokale Dateien geprüft.`);
+    await loadStatus();
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function openCommitDialog() {
@@ -1487,8 +1541,8 @@ $("refreshProjectGraph").addEventListener("click", () => loadProjectGraph().catc
 $("refreshPulls").addEventListener("click", () => loadPulls().catch((error) => toast(error.message, "error")));
 $("settingsBtn").addEventListener("click", () => openSettings().catch((error) => toast(error.message, "error")));
 $("settingsForm").addEventListener("submit", (event) => saveSettings(event).catch((error) => toast(error.message, "error")));
-$("pullBtn").addEventListener("click", () => pullRemote().catch((error) => toast(error.message, "error")));
-$("commitBtn").addEventListener("click", openCommitDialog);
+$("storageSyncBtn").addEventListener("click", () => synchronizeStorage().catch((error) => toast(error.message, "error")));
+$("codeUpdatePullBtn").addEventListener("click", () => pullRemote().catch((error) => toast(error.message, "error")));
 $("commitForm").addEventListener("submit", (event) => doManualCommit(event).catch((error) => toast(error.message, "error")));
 $("stopServerBtn").addEventListener("click", () => stopServer().catch((error) => toast(error.message, "error")));
 $("sidebarToggle").addEventListener("click", () => document.body.classList.toggle("sidebar-collapsed"));
@@ -1515,6 +1569,9 @@ window.setInterval(() => {
 })();
 
 Promise.all([loadStatus(), loadProjects(), loadResearchProviders(), loadSavedResearchResults()]).catch((error) => toast(error.message, "error"));
+checkCodeUpdate();
+window.setInterval(checkCodeUpdate, 60000);
+window.addEventListener("focus", checkCodeUpdate);
 loadProjectGraph().catch((error) => {
   $("repositoryGraph").innerHTML = '<p class="project-graph-loading error-copy">Projekt-Graph konnte nicht geladen werden: ' + esc(error.message) + '</p>';
 });

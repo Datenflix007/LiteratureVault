@@ -6,18 +6,69 @@ $script:ResearchProviderDefinitions = @(
     [PSCustomObject]@{ id = "crossref"; name = "Crossref"; mode = "api"; enabled = $true; documentationUrl = "https://www.crossref.org/documentation/retrieve-metadata/rest-api/"; searchUrl = "https://api.crossref.org/works"; message = "Freie bibliografische Metadaten-API; Volltexte und Abstracts hängen von den Depositen ab."; capabilities = @("keywords", "title", "author", "doi", "isbn", "issn", "year", "type") },
     [PSCustomObject]@{ id = "dnb"; name = "Deutsche Nationalbibliothek"; mode = "sru"; enabled = $true; documentationUrl = "https://www.dnb.de/sru"; searchUrl = "https://services.dnb.de/sru/dnb"; message = "Offizielle DNB-SRU-Schnittstelle für bibliografische Daten."; capabilities = @("keywords", "title", "author", "isbn", "issn", "year") },
     [PSCustomObject]@{ id = "thulb"; name = "ThULB Jena"; mode = "sru"; enabled = $true; documentationUrl = "https://isil.staatsbibliothek-berlin.de/isil/DE-27"; searchUrl = "https://sru.k10plus.de/opac-de-27"; message = "Öffentliche SRU-Suche im ThULB-Katalog (Sigel DE-27); Nachweise und lokale Bestandsinformationen."; capabilities = @("keywords", "title", "author", "isbn", "issn", "year") },
-    [PSCustomObject]@{ id = "jstor"; name = "JSTOR"; mode = "institutional"; enabled = $false; documentationUrl = "https://support.jstor.org/hc/en-us/articles/115005075327-JSTOR-XML-Gateway"; searchUrl = "https://www.jstor.org/action/doBasicSearch"; message = "JSTOR XML Gateway verlangt eine institutionelle Metasearch-Lizenz; keine direkte API ohne Zugang."; capabilities = @() },
-    [PSCustomObject]@{ id = "base"; name = "BASE"; mode = "external"; enabled = $false; documentationUrl = "https://www.base-search.net/"; searchUrl = "https://www.base-search.net/Search/Results"; message = "Adapter erst aktivieren, wenn ein zulässiger API-Zugang konfiguriert ist."; capabilities = @() },
-    [PSCustomObject]@{ id = "ddb"; name = "Deutsche Digitale Bibliothek"; mode = "api-key-required"; enabled = $false; documentationUrl = "https://pro.deutsche-digitale-bibliothek.de/daten-nutzen/api"; searchUrl = "https://www.deutsche-digitale-bibliothek.de/searchresults"; message = "API-Schlüssel erforderlich; bis zur Konfiguration nur externer Zugang."; capabilities = @() },
-    [PSCustomObject]@{ id = "europeana"; name = "Europeana"; mode = "api-key-required"; enabled = $false; documentationUrl = "https://pro.europeana.eu/page/apis"; searchUrl = "https://www.europeana.eu/en/search"; message = "API-Schlüssel erforderlich; bis zur Konfiguration nur externer Zugang."; capabilities = @() },
+    [PSCustomObject]@{ id = "jstor"; name = "JSTOR"; mode = "institutional-sru"; enabled = $false; documentationUrl = "https://support.jstor.org/hc/en-us/articles/115005075327-JSTOR-XML-Gateway"; searchUrl = "https://www.jstor.org/action/doBasicSearch"; message = "JSTOR XML Gateway verlangt eine institutionelle Metasearch-Lizenz; keine direkte API ohne Zugang."; capabilities = @("keywords", "title", "author", "year", "type") },
+    [PSCustomObject]@{ id = "base"; name = "BASE"; mode = "institutional-oai"; enabled = $false; documentationUrl = "https://oai.base-search.net/"; searchUrl = "https://www.base-search.net/Search/Results"; message = "BASE OAI-PMH muss für die IP-Adresse dieser Installation freigeschaltet werden."; capabilities = @("keywords", "title", "author", "year", "type", "openAccess") },
+    [PSCustomObject]@{ id = "ddb"; name = "Deutsche Digitale Bibliothek"; mode = "api-key-required"; enabled = $false; documentationUrl = "https://pro.deutsche-digitale-bibliothek.de/daten-nutzen/api"; searchUrl = "https://www.deutsche-digitale-bibliothek.de/searchresults"; message = "API-Schlüssel erforderlich; bis zur Konfiguration nur externer Zugang."; capabilities = @("keywords", "title", "author", "year", "type", "language") },
+    [PSCustomObject]@{ id = "europeana"; name = "Europeana"; mode = "api-key-required"; enabled = $false; documentationUrl = "https://pro.europeana.eu/page/apis"; searchUrl = "https://www.europeana.eu/en/search"; message = "API-Schlüssel erforderlich; bis zur Konfiguration nur externer Zugang."; capabilities = @("keywords", "title", "author", "year", "type", "language", "openAccess") },
     [PSCustomObject]@{ id = "k10plus"; name = "K10plus / GVK"; mode = "sru"; enabled = $true; documentationUrl = "https://www.gbv.de/services/k10plus/"; searchUrl = "https://sru.k10plus.de/gvk"; message = "Öffentliche SRU-Suche im K10plus/GVK-Gesamtkatalog; liefert Katalognachweise."; capabilities = @("keywords", "title", "author", "isbn", "issn", "year") },
     [PSCustomObject]@{ id = "zdb"; name = "Zeitschriftendatenbank"; mode = "sru"; enabled = $true; documentationUrl = "https://zeitschriftendatenbank.de/services/schnittstellen/sru"; searchUrl = "https://services.dnb.de/sru/zdb"; message = "Öffentliche ZDB-SRU-Schnittstelle für Zeitschriften-, Zeitungs- und Reihentitel; keine Aufsatzdatenbank."; capabilities = @("keywords", "title", "issn", "publisher", "year") },
     [PSCustomObject]@{ id = "ezb"; name = "Elektronische Zeitschriftenbibliothek"; mode = "xml"; enabled = $true; documentationUrl = "https://www.ur-library.de/ezb-xml/"; searchUrl = "https://ezb.ur.de/searchres.phtml"; message = "Öffentliche XML-Suche nach frei verfügbaren elektronischen Zeitschriften (EZB-Ampel grün)."; capabilities = @("keywords", "title", "issn", "publisher", "subject") },
     [PSCustomObject]@{ id = "dta"; name = "Deutsches Textarchiv"; mode = "opensearch"; enabled = $true; documentationUrl = "https://www.deutschestextarchiv.de/api"; searchUrl = "https://kaskade.dwds.de/dstar/dta/dstar.perl"; message = "Öffentliche Volltextsuche im historischen DTA-Korpus (ca. 1650–1900)."; capabilities = @("keywords", "title", "author", "year", "subject") }
 )
 
-function Get-ResearchProviderCatalog {
+function Get-ResearchProviderConfiguration {
+    $keys = @('JSTOR_SRU_URL', 'BASE_OAI_ENABLED', 'DDB_API_KEY', 'EUROPEANA_API_KEY')
+    $values = @{}
+    foreach ($key in $keys) {
+        $values[$key] = [Environment]::GetEnvironmentVariable($key)
+    }
+    $envPath = Join-Path (Split-Path -Parent $PSScriptRoot) '.env'
+    if (Test-Path -LiteralPath $envPath) {
+        foreach ($line in @(Get-Content -LiteralPath $envPath -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+            $trimmed = "$line".Trim()
+            if (-not $trimmed -or $trimmed.StartsWith('#') -or -not $trimmed.Contains('=')) { continue }
+            $key, $value = $trimmed.Split('=', 2)
+            $key = $key.Trim()
+            if ($keys -contains $key) { $values[$key] = $value.Trim() }
+        }
+    }
+    return $values
+}
+
+function Get-ConfiguredResearchProviderDefinitions {
+    $configuration = Get-ResearchProviderConfiguration
     return @($script:ResearchProviderDefinitions | ForEach-Object {
+        $enabled = [bool]$_.enabled
+        $message = $_.message
+        switch ($_.id) {
+            'jstor' {
+                $endpoint = "$($configuration['JSTOR_SRU_URL'])".Trim()
+                $enabled = $endpoint -match '^https://'
+                if ($enabled) { $message = 'Institutioneller JSTOR XML Gateway ist als SRU-Verbindung eingerichtet.' } else { $message = 'Für JSTOR die institutionelle SRU-Adresse in Speicher & Dienste hinterlegen.' }
+            }
+            'base' {
+                $enabled = "$($configuration['BASE_OAI_ENABLED'])".Trim().ToLowerInvariant() -in @('1', 'true', 'yes', 'ja')
+                if ($enabled) { $message = 'BASE OAI-PMH ist für diese Installation aktiviert.' } else { $message = 'BASE OAI-PMH erst nach IP-Freischaltung in Speicher & Dienste aktivieren.' }
+            }
+            'ddb' {
+                $enabled = -not [string]::IsNullOrWhiteSpace("$($configuration['DDB_API_KEY'])")
+                if ($enabled) { $message = 'DDB-API-Schlüssel ist lokal hinterlegt.' } else { $message = 'Für die DDB-Suche einen persönlichen API-Schlüssel in Speicher & Dienste hinterlegen.' }
+            }
+            'europeana' {
+                $enabled = -not [string]::IsNullOrWhiteSpace("$($configuration['EUROPEANA_API_KEY'])")
+                if ($enabled) { $message = 'Europeana-API-Schlüssel ist lokal hinterlegt.' } else { $message = 'Für die Europeana-Suche einen API-Schlüssel in Speicher & Dienste hinterlegen.' }
+            }
+        }
+        [PSCustomObject]@{
+            id = $_.id; name = $_.name; mode = $_.mode; enabled = $enabled
+            documentationUrl = $_.documentationUrl; searchUrl = $_.searchUrl
+            message = $message; capabilities = @($_.capabilities)
+        }
+    })
+}
+
+function Get-ResearchProviderCatalog {
+    return @(Get-ConfiguredResearchProviderDefinitions | ForEach-Object {
         [PSCustomObject]@{
             id = $_.id; name = $_.name; mode = $_.mode; enabled = $_.enabled
             documentationUrl = $_.documentationUrl; searchUrl = $_.searchUrl
@@ -28,7 +79,7 @@ function Get-ResearchProviderCatalog {
 
 function Get-ResearchProvider {
     param([string]$Id)
-    return @($script:ResearchProviderDefinitions | Where-Object { $_.id -eq "$Id".Trim().ToLowerInvariant() } | Select-Object -First 1)[0]
+    return @(Get-ConfiguredResearchProviderDefinitions | Where-Object { $_.id -eq "$Id".Trim().ToLowerInvariant() } | Select-Object -First 1)[0]
 }
 
 function Invoke-ResearchHttpGet {
@@ -147,7 +198,7 @@ function ConvertTo-ResearchStringArray {
 function New-ResearchRequest {
     param($Body)
     $providerIds = ConvertTo-ResearchStringArray (Get-BodyValue $Body "providers" @())
-    $activeIds = @($script:ResearchProviderDefinitions | Where-Object { $_.enabled } | ForEach-Object { $_.id })
+    $activeIds = @(Get-ConfiguredResearchProviderDefinitions | Where-Object { $_.enabled } | ForEach-Object { $_.id })
     $providerIds = @($providerIds | ForEach-Object { $_.ToLowerInvariant() } | Where-Object { $activeIds -contains $_ } | Select-Object -Unique)
     if (-not $providerIds.Count) { $providerIds = $activeIds }
     $limit = 50; [void][int]::TryParse("$(Get-BodyValue $Body 'limit' 50)", [ref]$limit)
@@ -447,6 +498,10 @@ function Invoke-ResearchSearch {
                 "crossref" { Invoke-CrossrefResearchProvider $Request }
                 "dnb" { Invoke-DnbResearchProvider $Request }
                 "thulb" { Invoke-ThulbResearchProvider $Request }
+                "jstor" { Invoke-JstorResearchProvider $Request }
+                "base" { Invoke-BaseResearchProvider $Request }
+                "ddb" { Invoke-DdbResearchProvider $Request }
+                "europeana" { Invoke-EuropeanaResearchProvider $Request }
                 "k10plus" { Invoke-K10plusResearchProvider $Request }
                 "zdb" { Invoke-ZdbResearchProvider $Request }
                 "ezb" { Invoke-EzbResearchProvider $Request }
@@ -545,6 +600,10 @@ function Remove-ProjectResearchSearch {
 . (Join-Path $PSScriptRoot "providers\crossref.ps1")
 . (Join-Path $PSScriptRoot "providers\dnb.ps1")
 . (Join-Path $PSScriptRoot "providers\thulb.ps1")
+. (Join-Path $PSScriptRoot "providers\jstor.ps1")
+. (Join-Path $PSScriptRoot "providers\base.ps1")
+. (Join-Path $PSScriptRoot "providers\ddb.ps1")
+. (Join-Path $PSScriptRoot "providers\europeana.ps1")
 . (Join-Path $PSScriptRoot "providers\k10plus.ps1")
 . (Join-Path $PSScriptRoot "providers\zdb.ps1")
 . (Join-Path $PSScriptRoot "providers\ezb.ps1")

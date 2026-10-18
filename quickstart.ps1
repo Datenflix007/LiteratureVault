@@ -522,6 +522,15 @@ function Ensure-SqliteDriver {
 
 # ----------- Vault UI ------------------------------------------------
 
+function Test-VaultUiReady {
+    try {
+        $response = Invoke-WebRequest -Uri 'http://localhost:8765/api/status' -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        return $response.StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
 function Start-VaultUi {
     $uiScript = Join-Path $ScriptDir "vault-ui.ps1"
     if (-not (Test-Path $uiScript)) {
@@ -529,21 +538,33 @@ function Start-VaultUi {
         return
     }
 
-    $existing = Get-CimInstance Win32_Process -Filter "name = 'powershell.exe' or name = 'pwsh.exe'" |
-        Where-Object { $_.CommandLine -like "*vault-ui.ps1*" -and $_.CommandLine -like "*$ScriptDir*" }
-
-    if ($existing) {
+    if (Test-VaultUiReady) {
         Write-Ok "UI laeuft bereits auf http://localhost:8765"
         Start-Process "http://localhost:8765"
         return
     }
 
-    Start-Process powershell -ArgumentList @(
+    $logDirectory = Join-Path $ScriptDir '.logs'
+    New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    $stdoutLog = Join-Path $logDirectory 'vault-ui.stdout.log'
+    $stderrLog = Join-Path $logDirectory 'vault-ui.stderr.log'
+    $process = Start-Process powershell -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", "`"$uiScript`"",
         "-OpenBrowser"
-    ) -WindowStyle Hidden
-    Write-Ok "UI gestartet: http://localhost:8765"
+    ) -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-VaultUiReady) {
+            Write-Ok "UI gestartet: http://localhost:8765"
+            return
+        }
+        if ($process.HasExited) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    $details = if (Test-Path -LiteralPath $stderrLog) { (Get-Content -LiteralPath $stderrLog -Tail 8 -ErrorAction SilentlyContinue) -join ' ' } else { '' }
+    throw "Die UI konnte nicht auf http://localhost:8765 gestartet werden.$(if ($details) { " Details: $details" })"
 }
 
 # ----------- Main ----------------------------------------------------
