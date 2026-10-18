@@ -146,18 +146,18 @@ normalisierte Wortübereinstimmungen zwischen dem Projektprofil
 (Forschungsfrage, These, Schlagwörter, Begriffe, Fachgebiet und Suchanfrage)
 und tatsächlich verfügbaren Metadaten des Treffers.
 
-| Variable | Bedeutung |
-| --- | --- |
-| $r$ | betrachteter Treffer |
-| $f$ | Metadatenfeld: Titel, Abstract, Schlagwörter oder Projektkontext |
-| $P$ | normalisierte Tokenfolge aus dem Projektprofil; Wiederholungen bleiben erhalten |
-| $D_f(r)$ | Menge der normalisierten Begriffe im Feld $f$ des Treffers $r$ |
-| $I$ | Menge der im Projekt als wichtig markierten Begriffe |
-| $a(t)$ | Gewicht eines Profilbegriffs $t$: $2$ für $t \in I$, sonst $1$ |
-| $m_f(r)$ | Übereinstimmung des Feldes $f$ in Prozent |
-| $w_f$ | Gewicht des Feldes $f$ |
-| $\mathcal{F}(r)$ | Menge der bei $r$ vorhandenen, nicht leeren Metadatenfelder |
-| $S(r)$ | angezeigter Relevanzscore des Treffers $r$ |
+| Variable           | Bedeutung                                                                       |
+| ------------------ | ------------------------------------------------------------------------------- |
+| $r$              | betrachteter Treffer                                                            |
+| $f$              | Metadatenfeld: Titel, Abstract, Schlagwörter oder Projektkontext               |
+| $P$              | normalisierte Tokenfolge aus dem Projektprofil; Wiederholungen bleiben erhalten |
+| $D_f(r)$         | Menge der normalisierten Begriffe im Feld $f$ des Treffers $r$              |
+| $I$              | Menge der im Projekt als wichtig markierten Begriffe                            |
+| $a(t)$           | Gewicht eines Profilbegriffs $t$: $2$ für $t \in I$, sonst $1$         |
+| $m_f(r)$         | Übereinstimmung des Feldes $f$ in Prozent                                    |
+| $w_f$            | Gewicht des Feldes $f$                                                        |
+| $\mathcal{F}(r)$ | Menge der bei $r$ vorhandenen, nicht leeren Metadatenfelder                   |
+| $S(r)$           | angezeigter Relevanzscore des Treffers $r$                                    |
 
 Für jedes vorhandene Feld wird zunächst der gewichtete Anteil der
 Profilbegriffe berechnet. $\mathbf{1}_{D_f(r)}(t)$ ist dabei $1$, wenn der

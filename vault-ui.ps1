@@ -69,6 +69,100 @@ function Get-ProjectStorePath {
     return Join-Path (Join-Path $root "Projekte") ".myliteraturevault-projects.json"
 }
 
+function Get-ProjectGraphDatabasePath {
+    return Join-Path (Join-Path (Ensure-StorageRoot) "Projekte") ".myliteraturevault-projectgraph.sqlite"
+}
+
+function Get-SqliteDriverPath {
+    $configured = "$env:MYLITERATUREVAULT_SQLITE3".Trim()
+    if ($configured -and (Test-Path -LiteralPath $configured)) { return [IO.Path]::GetFullPath($configured) }
+    $bundled = Join-Path $ScriptDir ".tools\sqlite\sqlite3.exe"
+    if (Test-Path -LiteralPath $bundled) { return $bundled }
+    $system = Get-Command sqlite3 -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($system) { return $system.Source }
+    throw "SQLite-Treiber fehlt. Bitte quickstart.bat erneut ausführen; es richtet sqlite3.exe für den Projektgraphen ein."
+}
+
+function ConvertTo-SqliteTextLiteral {
+    param([AllowNull()][string]$Value)
+    if ($null -eq $Value) { return 'NULL' }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+    if ($bytes.Length -eq 0) { return "''" }
+    $hex = ([BitConverter]::ToString($bytes)).Replace('-', '')
+    return "CAST(X'$hex' AS TEXT)"
+}
+
+function Invoke-ProjectGraphSqlite {
+    param([string]$Sql, [switch]$Json)
+    $driver = Get-SqliteDriverPath
+    $database = Get-ProjectGraphDatabasePath
+    $arguments = @('-batch', '-bail')
+    if ($Json) { $arguments += '-json' }
+    $arguments += @($database, $Sql)
+    $output = @(& $driver @arguments 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "Projektgraph-Datenbankfehler: $($output -join ' ')" }
+    if (-not $Json) { return @() }
+    $raw = ($output -join "`n").Trim()
+    if (-not $raw -or $raw -eq '[]') { return @() }
+    return @($raw | ConvertFrom-Json)
+}
+
+function Initialize-ProjectGraphStore {
+    $schema = @"
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS project_graph_projects (project_id TEXT PRIMARY KEY, color TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS project_graph_events (event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, occurred_at TEXT NOT NULL, event_type TEXT NOT NULL, label TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS idx_project_graph_events_project_time ON project_graph_events(project_id, occurred_at);
+"@
+    Invoke-ProjectGraphSqlite $schema | Out-Null
+}
+
+function Get-ProjectGraphColor {
+    param([string]$ProjectId)
+    $palette = @('#55c8ff', '#55d89d', '#c28cff', '#ffbc5c', '#ff7ca2', '#43d6c5', '#a8d45a', '#ff926b')
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try {
+        $index = $hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($ProjectId))[0] % $palette.Count
+        return $palette[$index]
+    } finally {
+        $hash.Dispose()
+    }
+}
+
+function Ensure-ProjectGraphProject {
+    param($Project)
+    Initialize-ProjectGraphStore
+    $projectId = "$(Get-BodyValue $Project 'id')".Trim()
+    if ($projectId -notmatch '^[a-f0-9]{32}$') { throw 'Ungültige Projekt-ID für den Projektgraphen.' }
+    $createdAt = "$(Get-BodyValue $Project 'createdAt')".Trim()
+    if (-not $createdAt) { $createdAt = (Get-Date).ToString('o') }
+    $now = (Get-Date).ToString('o')
+    $color = Get-ProjectGraphColor $projectId
+    $projectLiteral = ConvertTo-SqliteTextLiteral $projectId
+    $createdLiteral = ConvertTo-SqliteTextLiteral $createdAt
+    $nowLiteral = ConvertTo-SqliteTextLiteral $now
+    $colorLiteral = ConvertTo-SqliteTextLiteral $color
+    Invoke-ProjectGraphSqlite "INSERT OR IGNORE INTO project_graph_projects(project_id, color, created_at, updated_at) VALUES ($projectLiteral, $colorLiteral, $createdLiteral, $nowLiteral);" | Out-Null
+    $initialId = ConvertTo-SqliteTextLiteral "initial-$projectId"
+    $label = ConvertTo-SqliteTextLiteral 'Projekt angelegt'
+    $type = ConvertTo-SqliteTextLiteral 'created'
+    Invoke-ProjectGraphSqlite "INSERT OR IGNORE INTO project_graph_events(event_id, project_id, occurred_at, event_type, label, detail) VALUES ($initialId, $projectLiteral, $createdLiteral, $type, $label, '');" | Out-Null
+}
+
+function Add-ProjectGraphEvent {
+    param([string]$ProjectId, [string]$Type, [string]$Label, [string]$Detail = '', [string]$OccurredAt = '')
+    try {
+        $project = Get-ProjectById $ProjectId
+        Ensure-ProjectGraphProject $project
+        if (-not $OccurredAt) { $OccurredAt = (Get-Date).ToString('o') }
+        $eventId = [guid]::NewGuid().ToString('N')
+        $sql = "INSERT INTO project_graph_events(event_id, project_id, occurred_at, event_type, label, detail) VALUES ($(ConvertTo-SqliteTextLiteral $eventId), $(ConvertTo-SqliteTextLiteral $ProjectId), $(ConvertTo-SqliteTextLiteral $OccurredAt), $(ConvertTo-SqliteTextLiteral $Type), $(ConvertTo-SqliteTextLiteral $Label), $(ConvertTo-SqliteTextLiteral $Detail)); UPDATE project_graph_projects SET updated_at = $(ConvertTo-SqliteTextLiteral ((Get-Date).ToString('o')) WHERE project_id = $(ConvertTo-SqliteTextLiteral $ProjectId);"
+        Invoke-ProjectGraphSqlite $sql | Out-Null
+    } catch {
+        Write-Warning "Projektgraph-Ereignis konnte nicht gespeichert werden: $($_.Exception.Message)"
+    }
+}
+
 function Get-ProjectsRootPath {
     return [IO.Path]::GetFullPath((Join-Path (Ensure-StorageRoot) "Projekte"))
 }
@@ -412,6 +506,7 @@ function New-Project {
     if ("$(Get-BodyValue $Body 'priority')" -in @("low", "normal", "high")) { $project.priority = "$(Get-BodyValue $Body 'priority')" }
     $store.projects = @($store.projects) + @($project)
     Save-ProjectStore $store
+    Add-ProjectGraphEvent $project.id 'created' 'Projekt angelegt' $project.name $now
     return Get-ProjectSummary $project
 }
 
@@ -439,6 +534,7 @@ function New-ProjectTodo {
     $project[0].nextIssueNumber = $issueNumber + 1
     $project[0].updatedAt = $now
     Save-ProjectStore $store
+    Add-ProjectGraphEvent $ProjectId 'task' 'Aufgabe angelegt' $title $now
     return Get-ProjectSummary $project[0]
 }
 
@@ -481,6 +577,7 @@ function Set-ProjectTodo {
     }
     $project[0].updatedAt = $todo[0].updatedAt
     Save-ProjectStore $store
+    if ($events.Count) { Add-ProjectGraphEvent $ProjectId 'task' 'Aufgabe aktualisiert' $todo[0].title $todo[0].updatedAt }
     return Get-ProjectSummary $project[0]
 }
 
@@ -588,6 +685,7 @@ function Set-ProjectDetails {
     }
     $project[0].updatedAt = (Get-Date).ToString("o")
     Save-ProjectStore $store
+    Add-ProjectGraphEvent $ProjectId 'project' 'Projekt aktualisiert' $project[0].name $project[0].updatedAt
     return Get-ProjectSummary $project[0]
 }
 
@@ -600,6 +698,7 @@ function Set-ProjectArchiveState {
     $project[0].archivedAt = if ($Archived) { (Get-Date).ToString("o") } else { "" }
     $project[0].updatedAt = (Get-Date).ToString("o")
     Save-ProjectStore $store
+    Add-ProjectGraphEvent $ProjectId ($(if ($Archived) { 'archived' } else { 'restored' })) ($(if ($Archived) { 'Projekt archiviert' } else { 'Projekt wieder aktiviert' })) '' $project[0].updatedAt
     return Get-ProjectSummary $project[0]
 }
 
@@ -612,6 +711,7 @@ function Restore-Project {
     $project[0].archivedAt = ""
     $project[0].updatedAt = (Get-Date).ToString("o")
     Save-ProjectStore $store
+    Add-ProjectGraphEvent $ProjectId 'restored' 'Projekt wiederhergestellt' '' $project[0].updatedAt
     return Get-ProjectSummary $project[0]
 }
 
@@ -624,6 +724,7 @@ function Move-ProjectToTrash {
     $project[0].archivedAt = ""
     $project[0].updatedAt = (Get-Date).ToString("o")
     Save-ProjectStore $store
+    Add-ProjectGraphEvent $ProjectId 'trashed' 'Projekt in Papierkorb verschoben' '' $project[0].updatedAt
     return @{ id = $project[0].id; trashedAt = $project[0].trashedAt; filesKept = $true; zoteroItemsKept = $true }
 }
 
@@ -688,6 +789,80 @@ function Invoke-ZoteroLocalApi {
     } finally {
         $client.Dispose()
         $handler.Dispose()
+    }
+}
+
+$script:ZoteroLocalWriteAuthorization = $null
+
+function Invoke-ZoteroLocalApiRequest {
+    param(
+        [ValidateSet('GET', 'POST')][string]$Method,
+        [string]$Path,
+        $Body = $null,
+        [hashtable]$Headers = @{}
+    )
+    Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.UseProxy = $false
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(12)
+    try {
+        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($Method), "http://127.0.0.1:23119/api$Path")
+        $request.Headers.TryAddWithoutValidation('Zotero-API-Version', '3') | Out-Null
+        foreach ($name in $Headers.Keys) { $request.Headers.TryAddWithoutValidation($name, [string]$Headers[$name]) | Out-Null }
+        if ($null -ne $Body) {
+            $json = $Body | ConvertTo-Json -Depth 16 -Compress
+            $request.Content = [System.Net.Http.StringContent]::new($json, [Text.Encoding]::UTF8, 'application/json')
+        }
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            $detail = if ([string]::IsNullOrWhiteSpace($raw)) { '' } else { " $raw" }
+            throw "Zotero antwortet mit HTTP $([int]$response.StatusCode).$detail"
+        }
+        $data = if ([string]::IsNullOrWhiteSpace($raw)) { $null } else { $raw | ConvertFrom-Json }
+        $serverId = if ($response.Headers.Contains('Zotero-Server-ID')) { @($response.Headers.GetValues('Zotero-Server-ID'))[0] } else { '' }
+        return [PSCustomObject]@{ data = $data; serverId = "$serverId"; statusCode = [int]$response.StatusCode }
+    } catch {
+        throw "Zotero ist lokal nicht erreichbar oder verweigert den Import. Stelle sicher, dass Zotero läuft und den Zugriff anderer Anwendungen erlaubt. Details: $($_.Exception.Message)"
+    } finally {
+        if ($request) { $request.Dispose() }
+        $client.Dispose()
+        $handler.Dispose()
+    }
+}
+
+function Get-ZoteroLocalWriteAuthorization {
+    $probe = Invoke-ZoteroLocalApiRequest -Method 'GET' -Path '/'
+    $serverId = "$($probe.serverId)".Trim()
+    if (-not $serverId) { throw 'Zotero hat keine Server-ID geliefert. Der sichere lokale Schreibzugriff ist nicht verfügbar.' }
+    if ($script:ZoteroLocalWriteAuthorization -and $script:ZoteroLocalWriteAuthorization.serverId -eq $serverId -and $script:ZoteroLocalWriteAuthorization.key) {
+        return $script:ZoteroLocalWriteAuthorization
+    }
+    $authorization = Invoke-ZoteroLocalApiRequest -Method 'POST' -Path '/local/authorize' -Body @{ appName = 'MyLiteratureVault' } -Headers @{ 'Zotero-Server-ID' = $serverId }
+    $key = "$($authorization.data.key)".Trim()
+    if (-not $key) {
+        if ($authorization.data.denied) { throw 'Der direkte Import wurde in Zotero nicht erlaubt.' }
+        throw 'Zotero hat keine Schreibberechtigung zurückgegeben.'
+    }
+    $script:ZoteroLocalWriteAuthorization = [PSCustomObject]@{ serverId = $serverId; key = $key }
+    return $script:ZoteroLocalWriteAuthorization
+}
+
+function Invoke-ZoteroLocalWrite {
+    param([string]$Path, $Body)
+    $authorization = Get-ZoteroLocalWriteAuthorization
+    $headers = @{ 'Zotero-Server-ID' = $authorization.serverId; 'Zotero-API-Key' = $authorization.key; 'Zotero-Write-Token' = ([guid]::NewGuid().ToString('N')) }
+    try {
+        return Invoke-ZoteroLocalApiRequest -Method 'POST' -Path $Path -Body $Body -Headers $headers
+    } catch {
+        if ($_.Exception.Message -notmatch 'HTTP 401') { throw }
+        # Einmal erlaubte Schlüssel können nach einem einzelnen Schreibvorgang verbraucht sein.
+        $script:ZoteroLocalWriteAuthorization = $null
+        $authorization = Get-ZoteroLocalWriteAuthorization
+        $headers['Zotero-Server-ID'] = $authorization.serverId
+        $headers['Zotero-API-Key'] = $authorization.key
+        return Invoke-ZoteroLocalApiRequest -Method 'POST' -Path $Path -Body $Body -Headers $headers
     }
 }
 
@@ -893,15 +1068,127 @@ function Queue-ResearchResultForZotero {
     $doi = "$(Get-BodyValue $result 'doi')".Trim() -replace '^https?://(dx\.)?doi\.org/', ''
     $fingerprint = if ($doi) { "doi:$($doi.ToLowerInvariant())" } else { "title:$($title.ToLowerInvariant())|year:$(Get-BodyValue $result 'publicationYear')" }
     $existing = @($project[0].zoteroImportQueue | Where-Object { $_.fingerprint -eq $fingerprint -and $_.status -in @('pending', 'completed') } | Select-Object -First 1)
-    if ($existing) { return $existing[0] }
+    if ($existing -and "$($existing[0].status)" -eq 'completed') { return $existing[0] }
     $metadata = [PSCustomObject]@{
-        resultId = "$(Get-BodyValue $result 'resultId')".Trim(); title = $title; authors = @(Get-BodyValue $result 'authors' @()); publicationYear = "$(Get-BodyValue $result 'publicationYear')".Trim(); sourceYear = "$(Get-BodyValue $result 'sourceYear')".Trim(); sourceDate = "$(Get-BodyValue $result 'sourceDate')".Trim(); publicationType = "$(Get-BodyValue $result 'publicationType')".Trim()
+        resultId = "$(Get-BodyValue $result 'resultId')".Trim(); title = $title; authors = @(Get-BodyValue $result 'authors' @()); publicationYear = "$(Get-BodyValue $result 'publicationYear')".Trim(); sourceYear = "$(Get-BodyValue $result 'sourceYear')".Trim(); sourceDate = "$(Get-BodyValue $result 'sourceDate')".Trim(); publicationType = "$(Get-BodyValue $result 'publicationType')".Trim(); itemType = "$(Get-BodyValue $result 'itemType')".Trim(); publicationTitle = "$(Get-BodyValue $result 'publicationTitle')".Trim(); volume = "$(Get-BodyValue $result 'volume')".Trim(); issue = "$(Get-BodyValue $result 'issue')".Trim(); pages = "$(Get-BodyValue $result 'pages')".Trim()
         abstract = "$(Get-BodyValue $result 'abstract')".Trim(); keywords = @(Get-BodyValue $result 'keywords' @()); language = "$(Get-BodyValue $result 'language')".Trim(); doi = $doi; isbn = @(Get-BodyValue $result 'isbn' @()); issn = @(Get-BodyValue $result 'issn' @())
         sourceUrl = "$(Get-BodyValue $result 'sourceUrl')".Trim(); fulltextUrl = "$(Get-BodyValue $result 'fulltextUrl')".Trim(); publisher = "$(Get-BodyValue $result 'publisher')".Trim(); providers = @(Get-BodyValue $result 'providers' @()); classification = Get-BodyValue $result 'classification' $null
     }
-    $entry = [PSCustomObject]@{ id = [guid]::NewGuid().ToString('N'); fingerprint = $fingerprint; kind = $kind; status = 'pending'; result = $metadata; requestedAt = (Get-Date).ToString('o'); completedAt = ''; zoteroKey = ''; message = 'Wartet auf den lokalen Zotero-Plugin-Import.' }
+    if ($existing) {
+        $existing[0].kind = $kind; $existing[0].result = $metadata; $existing[0].message = 'Bereit für den direkten lokalen Zotero-Import.'; $existing[0].requestedAt = (Get-Date).ToString('o')
+        $project[0].updatedAt = (Get-Date).ToString('o'); Save-ProjectStore $store
+        return $existing[0]
+    }
+    $entry = [PSCustomObject]@{ id = [guid]::NewGuid().ToString('N'); fingerprint = $fingerprint; kind = $kind; status = 'pending'; result = $metadata; requestedAt = (Get-Date).ToString('o'); completedAt = ''; zoteroKey = ''; message = 'Bereit für den direkten lokalen Zotero-Import.' }
     $project[0].zoteroImportQueue = @($project[0].zoteroImportQueue) + @($entry); $project[0].updatedAt = (Get-Date).ToString('o'); Save-ProjectStore $store
     return $entry
+}
+
+function Get-ZoteroItemTypeForResearchResult {
+    param($Result)
+    $allowed = @('journalArticle', 'book', 'bookSection', 'thesis', 'report', 'webpage', 'document')
+    $provided = "$(Get-BodyValue $Result 'itemType')".Trim()
+    if ($provided -in $allowed) { return $provided }
+    $publicationType = "$(Get-BodyValue $Result 'publicationType')".ToLowerInvariant()
+    if ($publicationType -match 'journal|article') { return 'journalArticle' }
+    if ($publicationType -match 'chapter|book section') { return 'bookSection' }
+    if ($publicationType -match 'book|monograph') { return 'book' }
+    if ($publicationType -match 'thesis|dissertation') { return 'thesis' }
+    if ($publicationType -match 'report') { return 'report' }
+    if ($publicationType -match 'web') { return 'webpage' }
+    return 'document'
+}
+
+function ConvertTo-ZoteroCreators {
+    param($Authors)
+    $creators = @()
+    foreach ($author in @($Authors)) {
+        $name = "$author".Trim()
+        if (-not $name) { continue }
+        $comma = $name.IndexOf(',')
+        if ($comma -gt 0) {
+            $creators += [ordered]@{ creatorType = 'author'; lastName = $name.Substring(0, $comma).Trim(); firstName = $name.Substring($comma + 1).Trim() }
+            continue
+        }
+        $parts = @($name -split '\s+' | Where-Object { $_ })
+        if ($parts.Count -gt 1) {
+            $creators += [ordered]@{ creatorType = 'author'; firstName = ($parts[0..($parts.Count - 2)] -join ' '); lastName = $parts[-1] }
+        } else {
+            $creators += [ordered]@{ creatorType = 'author'; name = $name; fieldMode = 1 }
+        }
+    }
+    return @($creators)
+}
+
+function Find-ExistingZoteroResearchItem {
+    param([string]$Doi)
+    $normalizedDoi = "$Doi".Trim() -replace '^https?://(dx\.)?doi\.org/', ''
+    if (-not $normalizedDoi) { return $null }
+    $query = [Uri]::EscapeDataString($normalizedDoi)
+    foreach ($item in @(Invoke-ZoteroLocalApi "/users/0/items?format=json&limit=50&q=$query")) {
+        $itemDoi = "$(Get-BodyValue $item.data 'DOI')".Trim() -replace '^https?://(dx\.)?doi\.org/', ''
+        $key = "$(Get-BodyValue $item.data 'key')".Trim().ToUpperInvariant()
+        if ($itemDoi -ieq $normalizedDoi -and $key -match '^[A-Z0-9]{8}$') { return $key }
+    }
+    return $null
+}
+
+function New-ZoteroResearchItemPayload {
+    param($Result)
+    $title = "$(Get-BodyValue $Result 'title')".Trim()
+    if (-not $title -or $title -eq 'Ohne Titel') { throw 'Ein Zotero-Import benötigt einen Titel.' }
+    $item = [ordered]@{ itemType = Get-ZoteroItemTypeForResearchResult $Result; title = $title }
+    $creators = @(ConvertTo-ZoteroCreators (Get-BodyValue $Result 'authors' @()))
+    if ($creators.Count) { $item.creators = $creators }
+    $date = "$(Get-BodyValue $Result 'publicationYear')".Trim()
+    if (-not $date) { $date = "$(Get-BodyValue $Result 'sourceDate')".Trim() }
+    foreach ($field in @(
+        @{ zotero = 'date'; value = $date }, @{ zotero = 'publicationTitle'; value = "$(Get-BodyValue $Result 'publicationTitle')".Trim() },
+        @{ zotero = 'volume'; value = "$(Get-BodyValue $Result 'volume')".Trim() }, @{ zotero = 'issue'; value = "$(Get-BodyValue $Result 'issue')".Trim() },
+        @{ zotero = 'pages'; value = "$(Get-BodyValue $Result 'pages')".Trim() }, @{ zotero = 'publisher'; value = "$(Get-BodyValue $Result 'publisher')".Trim() },
+        @{ zotero = 'DOI'; value = "$(Get-BodyValue $Result 'doi')".Trim() }, @{ zotero = 'ISBN'; value = (@(Get-BodyValue $Result 'isbn' @()) -join '; ').Trim() },
+        @{ zotero = 'ISSN'; value = (@(Get-BodyValue $Result 'issn' @()) -join '; ').Trim() }, @{ zotero = 'language'; value = "$(Get-BodyValue $Result 'language')".Trim() },
+        @{ zotero = 'abstractNote'; value = "$(Get-BodyValue $Result 'abstract')".Trim() }
+    )) { if ($field.value) { $item[$field.zotero] = $field.value } }
+    $url = "$(Get-BodyValue $Result 'sourceUrl')".Trim()
+    $fulltextUrl = "$(Get-BodyValue $Result 'fulltextUrl')".Trim()
+    if ($url -or $fulltextUrl) { $item.url = if ($url) { $url } else { $fulltextUrl } }
+    if ($url -and $fulltextUrl -and $url -ne $fulltextUrl) { $item.extra = "Volltext-URL: $fulltextUrl" }
+    $tags = @(@(Get-BodyValue $Result 'keywords' @()) | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -Unique | ForEach-Object { [ordered]@{ tag = $_ } })
+    if ($tags.Count) { $item.tags = $tags }
+    return $item
+}
+
+function Set-ResearchImportMessage {
+    param([string]$ProjectId, [string]$ImportId, [string]$Message)
+    $store = Get-ProjectStore; $project = @($store.projects | Where-Object { $_.id -eq $ProjectId } | Select-Object -First 1)
+    if (-not $project) { return }
+    $entry = @($project[0].zoteroImportQueue | Where-Object { $_.id -eq $ImportId } | Select-Object -First 1)
+    if (-not $entry) { return }
+    $entry[0].message = $Message; $project[0].updatedAt = (Get-Date).ToString('o'); Save-ProjectStore $store
+}
+
+function Import-ResearchResultToZotero {
+    param([string]$ProjectId, $Body)
+    $entry = Queue-ResearchResultForZotero $ProjectId $Body
+    if ("$($entry.status)" -eq 'completed') { return [PSCustomObject]@{ status = 'completed'; zoteroKey = $entry.zoteroKey; created = $false; message = 'Der Treffer ist bereits in Zotero verknüpft.' } }
+    try {
+        $existingKey = Find-ExistingZoteroResearchItem "$($entry.result.doi)"
+        if ($existingKey) {
+            Complete-ResearchResultZoteroImport $ProjectId $entry.id ([PSCustomObject]@{ zoteroKey = $existingKey }) | Out-Null
+            return [PSCustomObject]@{ status = 'completed'; zoteroKey = $existingKey; created = $false; message = 'Der vorhandene DOI-Eintrag wurde mit dem Projekt verknüpft.' }
+        }
+        $write = Invoke-ZoteroLocalWrite -Path '/users/0/items' -Body @((New-ZoteroResearchItemPayload $entry.result))
+        $successful = Get-BodyValue $write.data 'successful' $null
+        $firstSuccess = if ($successful) { @($successful.PSObject.Properties | Select-Object -First 1) } else { @() }
+        $zoteroKey = if ($firstSuccess) { "$($firstSuccess[0].Value)".Trim().ToUpperInvariant() } else { '' }
+        if ($zoteroKey -notmatch '^[A-Z0-9]{8}$') { throw "Zotero hat keinen gültigen Schlüssel für den neuen Eintrag zurückgegeben." }
+        Complete-ResearchResultZoteroImport $ProjectId $entry.id ([PSCustomObject]@{ zoteroKey = $zoteroKey }) | Out-Null
+        return [PSCustomObject]@{ status = 'completed'; zoteroKey = $zoteroKey; created = $true; message = 'Der Eintrag wurde direkt in Zotero angelegt.' }
+    } catch {
+        Set-ResearchImportMessage $ProjectId $entry.id "Direkter Import fehlgeschlagen: $($_.Exception.Message)"
+        throw
+    }
 }
 
 function Complete-ResearchResultZoteroImport {
@@ -917,6 +1204,7 @@ function Complete-ResearchResultZoteroImport {
     if (-not @($project[0].references | Where-Object { $_.zoteroKey -eq $key } | Select-Object -First 1)) {
         $project[0].references = @($project[0].references) + @([PSCustomObject]@{ id = [guid]::NewGuid().ToString('N'); zoteroKey = $key; kind = $entry[0].kind; title = $entry[0].result.title; creators = (@($entry[0].result.authors) -join '; '); year = $entry[0].result.publicationYear; itemType = $entry[0].result.publicationType; doi = $entry[0].result.doi; url = if ($entry[0].result.sourceUrl) { $entry[0].result.sourceUrl } else { $entry[0].result.fulltextUrl }; note = ''; resultId = $entry[0].result.resultId; classificationSource = if ($classificationOrigin -eq 'manual') { 'manual' } else { '' }; classificationUpdatedAt = ''; addedAt = (Get-Date).ToString('o') })
     }
+    $project[0].zoteroSyncStatus = 'pending'; $project[0].zoteroSyncMessage = 'Zotero-Eintrag angelegt; Zuordnung zu Literatur oder Quellen wartet auf den nächsten Plugin-Abgleich.'
     $project[0].updatedAt = (Get-Date).ToString('o'); Save-ProjectStore $store
     return @{ ok = $true; zoteroKey = $key }
 }
@@ -1500,7 +1788,7 @@ function Handle-Api {
             return
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/research/import-zotero$" -and $method -eq "POST") {
-            Send-Json $Context (Queue-ResearchResultForZotero $matches[1] (Read-JsonBody $Context.Request)) 202
+            Send-Json $Context (Import-ResearchResultToZotero $matches[1] (Read-JsonBody $Context.Request)) 201
             return
         }
         if ($Path -match "^/api/projects/([a-f0-9]{32})/zotero-imports/([a-f0-9]{32})/complete$" -and $method -eq "POST") {

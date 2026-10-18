@@ -25,7 +25,8 @@ const state = {
   historyScope: {},
   historySelectedCommit: {},
   repositoryGraph: null,
-  repositoryGraphSelectedCommit: ""
+  repositoryGraphSelectedCommit: "",
+  zoteroImportDraft: null
 };
 
 const $ = (id) => document.getElementById(id);
@@ -381,14 +382,92 @@ async function toggleSavedResearchResult(resultId) {
   renderResearchBookmarks();
 }
 
+function zoteroItemTypeForResearchResult(publicationType) {
+  const type = String(publicationType || '').toLowerCase();
+  if (type.includes('journal') || type.includes('article')) return 'journalArticle';
+  if (type.includes('chapter') || type.includes('book section')) return 'bookSection';
+  if (type.includes('book') || type.includes('monograph')) return 'book';
+  if (type.includes('thesis') || type.includes('dissertation')) return 'thesis';
+  if (type.includes('report')) return 'report';
+  if (type.includes('web')) return 'webpage';
+  return 'document';
+}
+
+function splitMetadataList(value, separator = /[,;\n]/) {
+  return String(value || '').split(separator).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function openZoteroImportDialog(result, kind, project) {
+  if (!result || !project) throw new Error('Für den Zotero-Import fehlen Treffer oder Zielprojekt.');
+  state.zoteroImportDraft = { result: { ...result }, projectId: project.id };
+  $('zoteroImportForm').reset();
+  $('zoteroImportProject').textContent = 'Zielprojekt: ' + project.name;
+  $('zoteroImportKind').value = kind === 'source' ? 'source' : 'literature';
+  $('zoteroImportItemType').value = zoteroItemTypeForResearchResult(result.publicationType);
+  $('zoteroImportTitle').value = result.title || '';
+  $('zoteroImportAuthors').value = (result.authors || []).join('; ');
+  $('zoteroImportDate').value = result.publicationYear || result.sourceDate || '';
+  $('zoteroImportPublisher').value = result.publisher || '';
+  $('zoteroImportLanguage').value = result.language || '';
+  $('zoteroImportDoi').value = result.doi || '';
+  $('zoteroImportIsbn').value = (result.isbn || []).join(', ');
+  $('zoteroImportIssn').value = (result.issn || []).join(', ');
+  $('zoteroImportVolume').value = result.volume || '';
+  $('zoteroImportIssue').value = result.issue || '';
+  $('zoteroImportPages').value = result.pages || '';
+  $('zoteroImportSourceUrl').value = result.sourceUrl || '';
+  $('zoteroImportFulltextUrl').value = result.fulltextUrl || '';
+  $('zoteroImportKeywords').value = (result.keywords || []).join(', ');
+  $('zoteroImportAbstract').value = result.abstract || '';
+  $('zoteroImportDialog').showModal();
+  window.setTimeout(() => $('zoteroImportTitle').focus(), 30);
+}
+
+async function submitZoteroImport(event) {
+  event.preventDefault();
+  const draft = state.zoteroImportDraft;
+  const project = state.projects.find((entry) => entry.id === draft?.projectId);
+  if (!draft || !project) throw new Error('Der Importentwurf ist nicht mehr verfügbar.');
+  const result = {
+    ...draft.result,
+    title: $('zoteroImportTitle').value.trim(),
+    itemType: $('zoteroImportItemType').value,
+    authors: splitMetadataList($('zoteroImportAuthors').value, /[;\n]/),
+    publicationYear: $('zoteroImportDate').value.trim(),
+    publisher: $('zoteroImportPublisher').value.trim(),
+    language: $('zoteroImportLanguage').value.trim(),
+    doi: $('zoteroImportDoi').value.trim(),
+    isbn: splitMetadataList($('zoteroImportIsbn').value),
+    issn: splitMetadataList($('zoteroImportIssn').value),
+    volume: $('zoteroImportVolume').value.trim(),
+    issue: $('zoteroImportIssue').value.trim(),
+    pages: $('zoteroImportPages').value.trim(),
+    sourceUrl: $('zoteroImportSourceUrl').value.trim(),
+    fulltextUrl: $('zoteroImportFulltextUrl').value.trim(),
+    keywords: splitMetadataList($('zoteroImportKeywords').value),
+    abstract: $('zoteroImportAbstract').value.trim()
+  };
+  if (!result.title) throw new Error('Bitte einen Titel für den Zotero-Eintrag angeben.');
+  const submit = event.submitter;
+  if (submit) submit.disabled = true;
+  try {
+    const imported = await api('/api/projects/' + project.id + '/research/import-zotero', { method: 'POST', body: JSON.stringify({ kind: $('zoteroImportKind').value, result }) });
+    $('zoteroImportDialog').close();
+    state.zoteroImportDraft = null;
+    await api('/api/projects/' + project.id + '/zotero-collection/request', { method: 'POST', body: '{}' });
+    await loadProjects();
+    toast(imported.created ? 'Direkt in Zotero angelegt (' + imported.zoteroKey + '). Der nächste Zotero-Abgleich ordnet den Eintrag dem Projekt zu.' : imported.message || 'Zotero-Eintrag verknüpft.');
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
 async function importSavedResearchResultToZotero(resultId, kind) {
   const project = state.projects.find((entry) => entry.id === state.savedTargetProjectId);
   const result = state.savedResearchResults.find((entry) => entry.resultId === resultId);
   if (!project) throw new Error('Bitte wähle ein Projekt für den Zotero-Import.');
   if (!result) throw new Error('Der gemerkte Treffer wurde nicht gefunden.');
-  const queued = await api('/api/projects/' + project.id + '/research/import-zotero', { method: 'POST', body: JSON.stringify({ kind, result }) });
-  await api('/api/projects/' + project.id + '/zotero-collection/request', { method: 'POST', body: '{}' });
-  toast(queued.status === 'completed' ? 'Dieser Treffer ist bereits in Zotero verknüpft.' : 'Import an „' + project.name + '“ übergeben: ' + (kind === 'source' ? 'Quellen' : 'Literatur') + '.');
+  openZoteroImportDialog(result, kind, project);
 }
 
 function openResearchDetail(resultId) {
@@ -407,10 +486,8 @@ async function importResearchResultToZotero(resultId, kind) {
   const project = projectById();
   const result = researchResultById(resultId);
   if (!project || !result) throw new Error('Bitte öffne zuerst ein Forschungsprojekt.');
-  const queued = await api('/api/projects/' + project.id + '/research/import-zotero', { method: 'POST', body: JSON.stringify({ kind, result }) });
   $('researchDetailDialog').close();
-  toast(queued.status === 'completed' ? 'Dieser Treffer ist bereits in Zotero verknüpft.' : 'Import an Zotero übergeben. Das Plugin legt ihn in „' + (kind === 'source' ? 'Quellen' : 'Literatur') + '“ an.');
-  await api('/api/projects/' + project.id + '/zotero-collection/request', { method: 'POST', body: '{}' });
+  openZoteroImportDialog(result, kind, project);
 }
 
 async function setResearchClassification(resultId, category) {
@@ -1333,6 +1410,7 @@ $("syncZoteroBtn").addEventListener("click", async () => {
 $("newTaskBtn").addEventListener("click", () => openTaskDialog());
 $("newProjectForm").addEventListener("submit", (event) => createProject(event).catch((error) => toast(error.message, "error")));
 $("projectForm").addEventListener("submit", (event) => saveProjectDialog(event).catch((error) => toast(error.message, "error")));
+$("zoteroImportForm").addEventListener("submit", (event) => submitZoteroImport(event).catch((error) => toast(error.message, "error")));
 $("deleteProjectForm").addEventListener("submit", (event) => confirmProjectDeletion(event).catch((error) => toast(error.message, "error")));
 $("actionOpenProject").addEventListener("click", () => { const project = actionProject(); if (project) { $("projectActionsDialog").close(); openProject(project.id); } });
 $("actionEditProject").addEventListener("click", () => { const project = actionProject(); if (project) setSelectedProject(project.id); $("projectActionsDialog").close(); openProjectDialog(); });
