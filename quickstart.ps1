@@ -489,6 +489,37 @@ function Start-AutoSync {
     Write-Ok "Auto-Sync gestartet (Hintergrundprozess)"
 }
 
+# ----------- SQLite for the local project graph ---------------------
+
+function Ensure-SqliteDriver {
+    $toolsRoot = Join-Path $ScriptDir '.tools\sqlite'
+    $driver = Join-Path $toolsRoot 'sqlite3.exe'
+    if (-not (Test-Path -LiteralPath $driver)) {
+        Write-Step "Projektgraph-Speicher vorbereiten"
+        $architecture = if ([Environment]::Is64BitOperatingSystem -and [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq 'Arm64') { 'arm64' } else { 'x64' }
+        $version = '3540100'
+        $download = "https://www.sqlite.org/2026/sqlite-tools-win-$architecture-$version.zip"
+        $archive = Join-Path ([IO.Path]::GetTempPath()) ("myliteraturevault-sqlite-$version.zip")
+        try {
+            New-Item -ItemType Directory -Path $toolsRoot -Force | Out-Null
+            Write-Info "SQLite-Treiber wird einmalig aus der offiziellen SQLite-Ausgabe geladen."
+            Invoke-WebRequest -Uri $download -OutFile $archive -UseBasicParsing
+            Expand-Archive -LiteralPath $archive -DestinationPath $toolsRoot -Force
+        } finally {
+            if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $driver)) { throw "SQLite-Treiber konnte nicht eingerichtet werden. Bitte Internetverbindung prüfen und quickstart.bat erneut starten." }
+    # Den Exitcode direkt nach dem nativen Aufruf sichern: nachgelagerte
+    # PowerShell-Pipeline-Kommandos können $LASTEXITCODE sonst überschreiben.
+    $versionOutput = & $driver ':memory:' 'SELECT sqlite_version();' 2>&1
+    $sqliteExitCode = $LASTEXITCODE
+    $versionText = ($versionOutput | Select-Object -First 1).ToString().Trim()
+    if ($sqliteExitCode -ne 0 -or -not $versionText) { throw "SQLite-Treiber ist nicht ausführbar: $driver" }
+    [Environment]::SetEnvironmentVariable('MYLITERATUREVAULT_SQLITE3', $driver, 'Process')
+    Write-Ok "SQLite-Projektgraph bereit (v$versionText)"
+}
+
 # ----------- Vault UI ------------------------------------------------
 
 function Start-VaultUi {
@@ -530,6 +561,7 @@ try {
     Start-DockerDesktop
     Start-WebDav
     Start-AutoSync
+    Ensure-SqliteDriver
     Start-VaultUi
     Start-Zotero
 }

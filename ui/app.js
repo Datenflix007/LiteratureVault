@@ -24,8 +24,8 @@ const state = {
   projectHistoryLoading: {},
   historyScope: {},
   historySelectedCommit: {},
-  repositoryGraph: null,
-  repositoryGraphSelectedCommit: "",
+  projectGraph: null,
+  projectGraphSelectedEvent: "",
   zoteroImportDraft: null
 };
 
@@ -696,6 +696,65 @@ async function loadRepositoryGraph() {
   renderRepositoryGraph();
 }
 
+function timelineStamp(value) {
+  const stamp = Date.parse(value || '');
+  return Number.isFinite(stamp) ? stamp : Date.now();
+}
+
+function renderProjectGraph() {
+  const target = $("repositoryGraph");
+  const hint = target.closest('section')?.querySelector('.hint');
+  if (hint) hint.textContent = 'Jedes Projekt hat eine eigene Farbe und Zeitlinie. Ereignisse werden lokal in Ihrem Projektgraphen gespeichert.';
+  const graph = state.projectGraph;
+  if (!graph) {
+    target.innerHTML = '<p class="project-graph-loading">Projekt-Graph wird geladen …</p>';
+    return;
+  }
+  const projects = Array.isArray(graph.projects) ? graph.projects : [];
+  if (!projects.length) {
+    target.innerHTML = '<p class="project-graph-loading">Legen Sie ein Projekt an – seine lokale Zeitlinie erscheint dann hier.</p>';
+    return;
+  }
+  const allEvents = projects.flatMap((project) => (project.events || []).map((event) => ({ ...event, project })));
+  const timestamps = allEvents.map((event) => timelineStamp(event.occurred_at)).concat(projects.map((project) => timelineStamp(project.createdAt)));
+  const earliest = Math.min(...timestamps);
+  const latest = Math.max(...timestamps, Date.now());
+  const range = Math.max(86400000, latest - earliest);
+  const labelWidth = 174;
+  const graphWidth = Math.max(820, Math.min(1540, 720 + Math.ceil(range / 86400000) * 22));
+  const rowHeight = 74;
+  const graphHeight = projects.length * rowHeight + 36;
+  const eventById = new Map(allEvents.map((event) => [event.event_id, event]));
+  const selectedId = eventById.has(state.projectGraphSelectedEvent)
+    ? state.projectGraphSelectedEvent
+    : (allEvents[allEvents.length - 1] || {}).event_id;
+  const selected = eventById.get(selectedId);
+  const xFor = (value) => labelWidth + 18 + ((timelineStamp(value) - earliest) / range) * (graphWidth - labelWidth - 52);
+  const lines = projects.map((project, row) => {
+    const y = 31 + row * rowHeight;
+    return '<line class="project-graph-line" style="--graph-color:' + esc(project.color) + '" x1="' + labelWidth + '" y1="' + y + '" x2="' + (graphWidth - 24) + '" y2="' + y + '" />';
+  }).join('');
+  const labels = projects.map((project, row) => {
+    const y = 31 + row * rowHeight;
+    return '<div class="project-graph-label" style="top:' + (y - 19) + 'px;--graph-color:' + esc(project.color) + '"><i></i><strong>' + esc(project.name) + '</strong><small>' + esc(phaseLabels[project.status] || project.status || 'Projekt') + '</small></div>';
+  }).join('');
+  const events = allEvents.map((event) => {
+    const row = projects.findIndex((project) => project.id === event.project.id);
+    const y = 31 + row * rowHeight;
+    const isSelected = event.event_id === selectedId;
+    return '<button type="button" class="project-graph-event' + (isSelected ? ' selected' : '') + '" data-project-graph-event="' + esc(event.event_id) + '" style="left:' + xFor(event.occurred_at) + 'px;top:' + y + 'px;--graph-color:' + esc(event.project.color) + '" title="' + esc(event.label) + '"><span></span><em>' + esc(event.label) + '</em></button>';
+  }).join('');
+  const selectedDetail = selected
+    ? '<div class="project-graph-selected" style="--graph-color:' + esc(selected.project.color) + '"><i></i><div><span>' + esc(selected.project.name) + ' · ' + esc(formatDate(selected.occurred_at)) + '</span><strong>' + esc(selected.label) + '</strong><small>' + esc(selected.detail || 'Lokales Projekt-Ereignis') + '</small></div></div>'
+    : '';
+  target.innerHTML = '<div class="project-graph-summary"><span><strong>' + projects.length + '</strong> Projekte</span><span><strong>' + (graph.eventCount || allEvents.length) + '</strong> gespeicherte Ereignisse</span><span>Lokale SQLite-Zeitlinie</span></div><div class="project-graph-scroll" tabindex="0" aria-label="Scrollbarer Projektgraph"><div class="project-graph-canvas" style="width:' + graphWidth + 'px;height:' + graphHeight + 'px"><svg class="project-graph-edges" viewBox="0 0 ' + graphWidth + ' ' + graphHeight + '" width="' + graphWidth + '" height="' + graphHeight + '" aria-hidden="true">' + lines + '</svg>' + labels + events + '</div></div>' + selectedDetail;
+}
+
+async function loadProjectGraph() {
+  state.projectGraph = await api("/api/project-graph");
+  renderProjectGraph();
+}
+
 function projectHistoryPanel(project) {
   const history = state.projectHistory[project.id];
   const loading = state.projectHistoryLoading[project.id];
@@ -1301,6 +1360,8 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-new-task]")) return openTaskDialog();
   const historyCommit = event.target.closest('[data-history-commit]');
   if (historyCommit) { const project = projectById(); if (project) { state.historySelectedCommit[project.id] = historyCommit.dataset.historyCommit; renderWorkspace(); } return; }
+  const projectGraphEvent = event.target.closest('[data-project-graph-event]');
+  if (projectGraphEvent) { state.projectGraphSelectedEvent = projectGraphEvent.dataset.projectGraphEvent; renderProjectGraph(); return; }
   const repositoryCommit = event.target.closest('[data-repository-commit]');
   if (repositoryCommit) { state.repositoryGraphSelectedCommit = repositoryCommit.dataset.repositoryCommit; renderRepositoryGraph(); return; }
   const historyScope = event.target.closest('[data-history-scope]');
@@ -1422,7 +1483,7 @@ $("taskCommentForm").addEventListener("submit", (event) => addTaskComment(event)
 $("issueChecklistForm").addEventListener("submit", (event) => addChecklistItem(event).catch((error) => toast(error.message, "error")));
 $("sourceForm").addEventListener("submit", (event) => saveSourceDialog(event).catch((error) => toast(error.message, "error")));
 $("refreshActivity").addEventListener("click", () => loadActivity().catch((error) => toast(error.message, "error")));
-$("refreshRepositoryGraph").addEventListener("click", () => loadRepositoryGraph().catch((error) => toast(error.message, "error")));
+$("refreshProjectGraph").addEventListener("click", () => loadProjectGraph().catch((error) => toast(error.message, "error")));
 $("refreshPulls").addEventListener("click", () => loadPulls().catch((error) => toast(error.message, "error")));
 $("settingsBtn").addEventListener("click", () => openSettings().catch((error) => toast(error.message, "error")));
 $("settingsForm").addEventListener("submit", (event) => saveSettings(event).catch((error) => toast(error.message, "error")));
@@ -1454,6 +1515,6 @@ window.setInterval(() => {
 })();
 
 Promise.all([loadStatus(), loadProjects(), loadResearchProviders(), loadSavedResearchResults()]).catch((error) => toast(error.message, "error"));
-loadRepositoryGraph().catch((error) => {
-  $("repositoryGraph").innerHTML = '<p class="repository-graph-loading error-copy">Repository-Graph konnte nicht geladen werden: ' + esc(error.message) + '</p>';
+loadProjectGraph().catch((error) => {
+  $("repositoryGraph").innerHTML = '<p class="project-graph-loading error-copy">Projekt-Graph konnte nicht geladen werden: ' + esc(error.message) + '</p>';
 });

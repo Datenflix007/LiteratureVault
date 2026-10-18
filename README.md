@@ -32,6 +32,20 @@ Containers wird weiter abgewartet. Nach einem frischen Docker-Desktop-Start
 versucht der Quickstart den Container bis zu drei Mal. Erst wenn die Wartezeit
 abläuft, zeigt das Skript Status und letzte Container-Logs als Fehlerhilfe.
 
+### Lokaler Projekt-Graph
+
+Der Projekt-Graph auf der Startseite zeigt **nicht** die GitHub- oder
+Repository-Historie. Jede aktive Forschungsarbeit erhält eine eigene Farbe und
+eine Zeitlinie mit lokal gespeicherten Ereignissen, zum Beispiel Projektanlage,
+Aufgabenänderungen und Zotero-Verknüpfungen. Die Datenbank liegt im gewählten,
+bereits synchronisierten Arbeitsordner unter
+`Projekte/.myliteraturevault-projectgraph.sqlite`; sie wird weder in Git noch
+in Git LFS aufgenommen.
+
+Unter Windows lädt `quickstart.bat` beim ersten Start die offizielle SQLite-
+Kommandozeile nach `.tools/sqlite/sqlite3.exe` und prüft sie vor dem UI-Start.
+Danach arbeitet die Zeitlinie offline und ohne separaten Datenbankserver.
+
 ### 2. Zotero einmalig verbinden
 
 1. In Zotero **Bearbeiten → Einstellungen → Sync → Datei-Synchronisation**
@@ -166,7 +180,7 @@ Begriff $t$ im jeweiligen Feld vorkommt, andernfalls $0$:
 $$
 m_f(r) =
 \begin{cases}
-\operatorname{round}_{0{,}1}\!\left(100 \cdot \dfrac{\sum\limits_{t \in P} a(t) \cdot \mathbf{1}_{D_f(r)}(t)}{\sum\limits_{t \in P} a(t)}\right), & \text{falls } P \ne \varnothing, \\
+\mathrm{round}_{0{,}1}\!\left(100 \cdot \dfrac{\sum\limits_{t \in P} a(t) \cdot \mathbf{1}_{D_f(r)}(t)}{\sum\limits_{t \in P} a(t)}\right), & \text{falls } P \ne \varnothing, \\
 0, & \text{falls } P = \varnothing.
 \end{cases}
 $$
@@ -177,7 +191,7 @@ nicht zu $\mathcal{F}(r)$ und werden damit transparent aus dem Nenner entfernt:
 $$
 S(r) =
 \begin{cases}
-\operatorname{round}_{0}\!\left(\dfrac{\sum\limits_{f \in \mathcal{F}(r)} w_f \cdot m_f(r)}{\sum\limits_{f \in \mathcal{F}(r)} w_f}\right), & \text{falls } \mathcal{F}(r) \ne \varnothing \text{ und ein Projektprofil vorliegt}, \\
+\mathrm{round}_{0}\!\left(\dfrac{\sum\limits_{f \in \mathcal{F}(r)} w_f \cdot m_f(r)}{\sum\limits_{f \in \mathcal{F}(r)} w_f}\right), & \text{falls } \mathcal{F}(r) \ne \varnothing \text{ und ein Projektprofil vorliegt}, \\
 0, & \text{sonst}.
 \end{cases}
 $$
@@ -187,17 +201,17 @@ $w_{\mathrm{Titel}} = 30$, $w_{\mathrm{Abstract}} = 40$,
 $w_{\mathrm{Schlagwörter}} = 20$ und $w_{\mathrm{Projektkontext}} = 10$.
 Der Projektkontext besteht ausschließlich aus vorhandenem Dokumenttyp und
 Verlag; es wird kein zusätzlicher Inhalt hinzuerfunden. Die Schreibweise
-$\operatorname{round}_{0{,}1}$ steht für die Rundung auf eine Nachkommastelle,
-$\operatorname{round}_{0}$ für die Rundung auf eine ganze Zahl.
+$\mathrm{round}_{0{,}1}$ steht für die Rundung auf eine Nachkommastelle,
+$\mathrm{round}_{0}$ für die Rundung auf eine ganze Zahl.
 
 **Beispiel.** Für $m_{\mathrm{Titel}}(r) = 50\,\%$,
 $m_{\mathrm{Abstract}}(r) = 25\,\%$,
 fehlende Schlagwörter und $m_{\mathrm{Projektkontext}}(r) = 0\,\%$ gilt:
 
 $$
-S(r) = \operatorname{round}_{0}\!\left(
+S(r) = \mathrm{round}_{0}\!\left(
 \dfrac{30 \cdot 50 + 40 \cdot 25 + 10 \cdot 0}{30 + 40 + 10}
-\right) = \operatorname{round}_{0}(31{,}25) = 31.
+\right) = \mathrm{round}_{0}(31{,}25) = 31.
 $$
 
 Die aufklappbare Begründung jeder Trefferkarte zeigt die tatsächlich

@@ -5,6 +5,7 @@
 
 # Zotero attachment data must never be committed or sent to Git LFS.
 data/
+.tools/
 
 # Build artefacts
 dist/

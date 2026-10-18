@@ -156,7 +156,9 @@ function Add-ProjectGraphEvent {
         Ensure-ProjectGraphProject $project
         if (-not $OccurredAt) { $OccurredAt = (Get-Date).ToString('o') }
         $eventId = [guid]::NewGuid().ToString('N')
-        $sql = "INSERT INTO project_graph_events(event_id, project_id, occurred_at, event_type, label, detail) VALUES ($(ConvertTo-SqliteTextLiteral $eventId), $(ConvertTo-SqliteTextLiteral $ProjectId), $(ConvertTo-SqliteTextLiteral $OccurredAt), $(ConvertTo-SqliteTextLiteral $Type), $(ConvertTo-SqliteTextLiteral $Label), $(ConvertTo-SqliteTextLiteral $Detail)); UPDATE project_graph_projects SET updated_at = $(ConvertTo-SqliteTextLiteral ((Get-Date).ToString('o')) WHERE project_id = $(ConvertTo-SqliteTextLiteral $ProjectId);"
+        $updatedLiteral = ConvertTo-SqliteTextLiteral ((Get-Date).ToString('o'))
+        $projectLiteral = ConvertTo-SqliteTextLiteral $ProjectId
+        $sql = "INSERT INTO project_graph_events(event_id, project_id, occurred_at, event_type, label, detail) VALUES ($(ConvertTo-SqliteTextLiteral $eventId), $projectLiteral, $(ConvertTo-SqliteTextLiteral $OccurredAt), $(ConvertTo-SqliteTextLiteral $Type), $(ConvertTo-SqliteTextLiteral $Label), $(ConvertTo-SqliteTextLiteral $Detail)); UPDATE project_graph_projects SET updated_at = $updatedLiteral WHERE project_id = $projectLiteral;"
         Invoke-ProjectGraphSqlite $sql | Out-Null
     } catch {
         Write-Warning "Projektgraph-Ereignis konnte nicht gespeichert werden: $($_.Exception.Message)"
@@ -792,28 +794,21 @@ function Invoke-ZoteroLocalApi {
     }
 }
 
-$script:ZoteroLocalWriteAuthorization = $null
-
-function Invoke-ZoteroLocalApiRequest {
-    param(
-        [ValidateSet('GET', 'POST')][string]$Method,
-        [string]$Path,
-        $Body = $null,
-        [hashtable]$Headers = @{}
-    )
+function Invoke-ZoteroConnectorWrite {
+    param([string]$Path, $Body)
     Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
     $handler = [System.Net.Http.HttpClientHandler]::new()
     $handler.UseProxy = $false
     $client = [System.Net.Http.HttpClient]::new($handler)
     $client.Timeout = [TimeSpan]::FromSeconds(12)
     try {
-        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($Method), "http://127.0.0.1:23119/api$Path")
-        $request.Headers.TryAddWithoutValidation('Zotero-API-Version', '3') | Out-Null
-        foreach ($name in $Headers.Keys) { $request.Headers.TryAddWithoutValidation($name, [string]$Headers[$name]) | Out-Null }
-        if ($null -ne $Body) {
-            $json = $Body | ConvertTo-Json -Depth 16 -Compress
-            $request.Content = [System.Net.Http.StringContent]::new($json, [Text.Encoding]::UTF8, 'application/json')
-        }
+        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, "http://127.0.0.1:23119$Path")
+        # Der Connector ist Zotero's lokaler, schreibender Endpunkt. Die /api/-
+        # Routen sind absichtlich nur lesbar.
+        $request.Headers.TryAddWithoutValidation('X-Zotero-Connector-API-Version', '3') | Out-Null
+        $request.Headers.TryAddWithoutValidation('Zotero-Allowed-Request', 'true') | Out-Null
+        $json = $Body | ConvertTo-Json -Depth 16 -Compress
+        $request.Content = [System.Net.Http.StringContent]::new($json, [Text.Encoding]::UTF8, 'application/json')
         $response = $client.SendAsync($request).GetAwaiter().GetResult()
         $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if (-not $response.IsSuccessStatusCode) {
@@ -821,48 +816,13 @@ function Invoke-ZoteroLocalApiRequest {
             throw "Zotero antwortet mit HTTP $([int]$response.StatusCode).$detail"
         }
         $data = if ([string]::IsNullOrWhiteSpace($raw)) { $null } else { $raw | ConvertFrom-Json }
-        $serverId = if ($response.Headers.Contains('Zotero-Server-ID')) { @($response.Headers.GetValues('Zotero-Server-ID'))[0] } else { '' }
-        return [PSCustomObject]@{ data = $data; serverId = "$serverId"; statusCode = [int]$response.StatusCode }
+        return [PSCustomObject]@{ data = $data; statusCode = [int]$response.StatusCode }
     } catch {
-        throw "Zotero ist lokal nicht erreichbar oder verweigert den Import. Stelle sicher, dass Zotero läuft und den Zugriff anderer Anwendungen erlaubt. Details: $($_.Exception.Message)"
+        throw "Zotero Connector konnte den Eintrag nicht anlegen. Stelle sicher, dass Zotero läuft und den Zugriff anderer Anwendungen erlaubt. Details: $($_.Exception.Message)"
     } finally {
         if ($request) { $request.Dispose() }
         $client.Dispose()
         $handler.Dispose()
-    }
-}
-
-function Get-ZoteroLocalWriteAuthorization {
-    $probe = Invoke-ZoteroLocalApiRequest -Method 'GET' -Path '/'
-    $serverId = "$($probe.serverId)".Trim()
-    if (-not $serverId) { throw 'Zotero hat keine Server-ID geliefert. Der sichere lokale Schreibzugriff ist nicht verfügbar.' }
-    if ($script:ZoteroLocalWriteAuthorization -and $script:ZoteroLocalWriteAuthorization.serverId -eq $serverId -and $script:ZoteroLocalWriteAuthorization.key) {
-        return $script:ZoteroLocalWriteAuthorization
-    }
-    $authorization = Invoke-ZoteroLocalApiRequest -Method 'POST' -Path '/local/authorize' -Body @{ appName = 'MyLiteratureVault' } -Headers @{ 'Zotero-Server-ID' = $serverId }
-    $key = "$($authorization.data.key)".Trim()
-    if (-not $key) {
-        if ($authorization.data.denied) { throw 'Der direkte Import wurde in Zotero nicht erlaubt.' }
-        throw 'Zotero hat keine Schreibberechtigung zurückgegeben.'
-    }
-    $script:ZoteroLocalWriteAuthorization = [PSCustomObject]@{ serverId = $serverId; key = $key }
-    return $script:ZoteroLocalWriteAuthorization
-}
-
-function Invoke-ZoteroLocalWrite {
-    param([string]$Path, $Body)
-    $authorization = Get-ZoteroLocalWriteAuthorization
-    $headers = @{ 'Zotero-Server-ID' = $authorization.serverId; 'Zotero-API-Key' = $authorization.key; 'Zotero-Write-Token' = ([guid]::NewGuid().ToString('N')) }
-    try {
-        return Invoke-ZoteroLocalApiRequest -Method 'POST' -Path $Path -Body $Body -Headers $headers
-    } catch {
-        if ($_.Exception.Message -notmatch 'HTTP 401') { throw }
-        # Einmal erlaubte Schlüssel können nach einem einzelnen Schreibvorgang verbraucht sein.
-        $script:ZoteroLocalWriteAuthorization = $null
-        $authorization = Get-ZoteroLocalWriteAuthorization
-        $headers['Zotero-Server-ID'] = $authorization.serverId
-        $headers['Zotero-API-Key'] = $authorization.key
-        return Invoke-ZoteroLocalApiRequest -Method 'POST' -Path $Path -Body $Body -Headers $headers
     }
 }
 
@@ -1121,14 +1081,19 @@ function ConvertTo-ZoteroCreators {
 }
 
 function Find-ExistingZoteroResearchItem {
-    param([string]$Doi)
-    $normalizedDoi = "$Doi".Trim() -replace '^https?://(dx\.)?doi\.org/', ''
-    if (-not $normalizedDoi) { return $null }
-    $query = [Uri]::EscapeDataString($normalizedDoi)
+    param($Result)
+    $normalizedDoi = "$(Get-BodyValue $Result 'doi')".Trim() -replace '^https?://(dx\.)?doi\.org/', ''
+    $title = "$(Get-BodyValue $Result 'title')".Trim()
+    if (-not $normalizedDoi -and -not $title) { return $null }
+    $lookup = if ($normalizedDoi) { $normalizedDoi } else { $title }
+    $query = [Uri]::EscapeDataString($lookup)
     foreach ($item in @(Invoke-ZoteroLocalApi "/users/0/items?format=json&limit=50&q=$query")) {
         $itemDoi = "$(Get-BodyValue $item.data 'DOI')".Trim() -replace '^https?://(dx\.)?doi\.org/', ''
+        $itemTitle = "$(Get-BodyValue $item.data 'title')".Trim()
         $key = "$(Get-BodyValue $item.data 'key')".Trim().ToUpperInvariant()
-        if ($itemDoi -ieq $normalizedDoi -and $key -match '^[A-Z0-9]{8}$') { return $key }
+        if ($key -notmatch '^[A-Z0-9]{8}$') { continue }
+        if ($normalizedDoi -and $itemDoi -ieq $normalizedDoi) { return $key }
+        if (-not $normalizedDoi -and $title -and $itemTitle -ieq $title) { return $key }
     }
     return $null
 }
@@ -1173,16 +1138,22 @@ function Import-ResearchResultToZotero {
     $entry = Queue-ResearchResultForZotero $ProjectId $Body
     if ("$($entry.status)" -eq 'completed') { return [PSCustomObject]@{ status = 'completed'; zoteroKey = $entry.zoteroKey; created = $false; message = 'Der Treffer ist bereits in Zotero verknüpft.' } }
     try {
-        $existingKey = Find-ExistingZoteroResearchItem "$($entry.result.doi)"
+        $existingKey = Find-ExistingZoteroResearchItem $entry.result
         if ($existingKey) {
             Complete-ResearchResultZoteroImport $ProjectId $entry.id ([PSCustomObject]@{ zoteroKey = $existingKey }) | Out-Null
             return [PSCustomObject]@{ status = 'completed'; zoteroKey = $existingKey; created = $false; message = 'Der vorhandene DOI-Eintrag wurde mit dem Projekt verknüpft.' }
         }
-        $write = Invoke-ZoteroLocalWrite -Path '/users/0/items' -Body @((New-ZoteroResearchItemPayload $entry.result))
-        $successful = Get-BodyValue $write.data 'successful' $null
-        $firstSuccess = if ($successful) { @($successful.PSObject.Properties | Select-Object -First 1) } else { @() }
-        $zoteroKey = if ($firstSuccess) { "$($firstSuccess[0].Value)".Trim().ToUpperInvariant() } else { '' }
-        if ($zoteroKey -notmatch '^[A-Z0-9]{8}$') { throw "Zotero hat keinen gültigen Schlüssel für den neuen Eintrag zurückgegeben." }
+        $connectorItem = New-ZoteroResearchItemPayload $entry.result
+        $connectorItem['id'] = "myliteraturevault-$($entry.id)"
+        $origin = if ("$($connectorItem.url)".Trim()) { "$($connectorItem.url)".Trim() } else { 'https://myliteraturevault.local/import' }
+        $write = Invoke-ZoteroConnectorWrite -Path '/connector/saveItems' -Body @{ sessionID = "myliteraturevault-$($entry.id)"; uri = $origin; items = @($connectorItem) }
+        if ($write.statusCode -ne 201) { throw "Zotero hat den Eintrag nicht angenommen (HTTP $($write.statusCode))." }
+        $zoteroKey = ''
+        for ($attempt = 0; $attempt -lt 12 -and $zoteroKey -notmatch '^[A-Z0-9]{8}$'; $attempt++) {
+            if ($attempt -gt 0) { Start-Sleep -Milliseconds 250 }
+            $zoteroKey = Find-ExistingZoteroResearchItem $entry.result
+        }
+        if ($zoteroKey -notmatch '^[A-Z0-9]{8}$') { throw 'Zotero hat den Eintrag angenommen, aber noch keinen lesbaren Schlüssel geliefert. Bitte den Import erneut versuchen.' }
         Complete-ResearchResultZoteroImport $ProjectId $entry.id ([PSCustomObject]@{ zoteroKey = $zoteroKey }) | Out-Null
         return [PSCustomObject]@{ status = 'completed'; zoteroKey = $zoteroKey; created = $true; message = 'Der Eintrag wurde direkt in Zotero angelegt.' }
     } catch {
@@ -1206,6 +1177,7 @@ function Complete-ResearchResultZoteroImport {
     }
     $project[0].zoteroSyncStatus = 'pending'; $project[0].zoteroSyncMessage = 'Zotero-Eintrag angelegt; Zuordnung zu Literatur oder Quellen wartet auf den nächsten Plugin-Abgleich.'
     $project[0].updatedAt = (Get-Date).ToString('o'); Save-ProjectStore $store
+    Add-ProjectGraphEvent $ProjectId 'reference' 'Zotero-Eintrag verknüpft' "$($entry[0].result.title)" $project[0].updatedAt
     return @{ ok = $true; zoteroKey = $key }
 }
 
@@ -1446,13 +1418,26 @@ function Get-GitCommitGraph {
     return @($commits)
 }
 
-function Get-RepositoryGraphPayload {
-    $commits = @(Get-GitCommitGraph)
-    return [PSCustomObject]@{
-        commits = $commits
-        branchCount = @($commits | ForEach-Object { $_.refs } | Where-Object { $_ -and $_ -notmatch '^tag:' } | Select-Object -Unique).Count
-        mergeCount = @($commits | Where-Object { @($_.parents).Count -gt 1 }).Count
+function Get-ProjectGraphPayload {
+    $store = Get-ProjectStore
+    $projects = @($store.projects | Where-Object { -not $_.trashedAt })
+    foreach ($project in $projects) { Ensure-ProjectGraphProject $project }
+    if (-not $projects.Count) { return [PSCustomObject]@{ generatedAt = (Get-Date).ToString('o'); projects = @(); eventCount = 0 } }
+    $records = @(Invoke-ProjectGraphSqlite 'SELECT project_id, color, created_at, updated_at FROM project_graph_projects;' -Json)
+    $events = @(Invoke-ProjectGraphSqlite 'SELECT event_id, project_id, occurred_at, event_type, label, detail FROM project_graph_events ORDER BY occurred_at ASC;' -Json)
+    $recordByProject = @{}
+    foreach ($record in $records) { $recordByProject["$($record.project_id)"] = $record }
+    $visibleIds = @($projects | ForEach-Object { "$($_.id)" })
+    $visibleEvents = @($events | Where-Object { $visibleIds -contains "$($_.project_id)" })
+    $graphProjects = foreach ($project in $projects) {
+        $record = $recordByProject["$($project.id)"]
+        [PSCustomObject]@{
+            id = $project.id; name = $project.name; status = $project.status; deadline = $project.deadline; createdAt = $project.createdAt; updatedAt = $project.updatedAt
+            color = if ($record) { "$($record.color)" } else { Get-ProjectGraphColor $project.id }
+            events = @($visibleEvents | Where-Object { "$($_.project_id)" -eq "$($project.id)" })
+        }
     }
+    return [PSCustomObject]@{ generatedAt = (Get-Date).ToString('o'); projects = @($graphProjects); eventCount = $visibleEvents.Count }
 }
 
 function Get-ProjectHistoryPayload {
@@ -1570,7 +1555,7 @@ function Handle-Api {
         if ($method -eq "OPTIONS") { Send-Response $Context 204 "" "text/plain"; return }
         if ($Path -eq "/api/status") { Send-Json $Context (Get-Status); return }
         if ($Path -eq "/api/log") { Send-Json $Context (Get-Log); return }
-        if ($Path -eq "/api/repository-graph" -and $method -eq "GET") { Send-Json $Context (Get-RepositoryGraphPayload); return }
+        if ($Path -eq "/api/project-graph" -and $method -eq "GET") { Send-Json $Context (Get-ProjectGraphPayload); return }
         if ($Path -eq "/api/zotero/status" -and $method -eq "GET") { Send-Json $Context (Get-ZoteroStatus); return }
         if ($Path -eq "/api/zotero/items" -and $method -eq "GET") {
             $limit = 20
