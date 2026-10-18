@@ -32,8 +32,9 @@ in GitHub und nicht in Git LFS.
 Der erste Docker-Start darf etwas dauern: Das Windows-Skript wartet bis zu vier
 Minuten auf Docker Desktop und danach bis zu acht Minuten auf WebDAV. Währenddessen
 ist `Container zotero-webdav Creating` normal; auch ein asynchrones Erzeugen des
-Containers wird weiter abgewartet. Erst wenn die Wartezeit abläuft, zeigt das
-Skript Status und letzte Container-Logs als Fehlerhilfe.
+Containers wird weiter abgewartet. Nach einem frischen Docker-Desktop-Start
+versucht der Quickstart den Container bis zu drei Mal. Erst wenn die Wartezeit
+abläuft, zeigt das Skript Status und letzte Container-Logs als Fehlerhilfe.
 
 ### 2. Zotero einmalig verbinden
 

@@ -9,6 +9,8 @@ $ScriptDir = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
 Set-Location $ScriptDir
 $script:FirstRun = $false
 $WebDavStartupTimeoutMinutes = 8
+$WebDavComposeMaxAttempts = 3
+$WebDavComposeRetryDelaySeconds = 5
 
 # ----------- Helpers -------------------------------------------------
 
@@ -345,6 +347,37 @@ function Test-WebDavContainerStarting {
     return $outputText -match "(?im)^\\s*Container\\s+zotero-webdav\\s+(Creating|Created|Starting)\\s*$"
 }
 
+function Invoke-WebDavComposeUp {
+    # Docker Compose can emit progress on stderr while Docker Desktop is still
+    # settling. Capture that output with a non-terminating preference so the
+    # quickstart can retry instead of entering the outer catch block.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& docker compose --env-file .env up -d 2>&1)
+        $exitCode = $LASTEXITCODE
+        return [PSCustomObject]@{
+            Output = $output
+            ExitCode = $exitCode
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
+function Write-WebDavComposeLogs {
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & docker compose --env-file .env logs --tail 20 2>&1 |
+            ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
 function Start-WebDav {
     Write-Step "[6/7] WebDAV Container starten"
 
@@ -371,16 +404,32 @@ function Start-WebDav {
 
     Write-Info "Starte WebDAV Container..."
     # .env is intentionally ignored by Git and contains the local credentials.
-    $upOut = docker compose --env-file .env up -d 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $containerState = Get-WebDavContainerState
-        if (-not (Test-WebDavContainerStarting -ComposeOutput $upOut -ContainerState $containerState)) {
-            $upOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-            docker compose --env-file .env logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-            throw "WebDAV Container konnte nicht gestartet werden."
+    $upOut = @()
+    $containerState = "nicht vorhanden"
+    for ($attempt = 1; $attempt -le $WebDavComposeMaxAttempts; $attempt++) {
+        $composeResult = Invoke-WebDavComposeUp
+        $upOut = @($composeResult.Output)
+        if ($composeResult.ExitCode -eq 0) {
+            break
         }
+
+        $containerState = Get-WebDavContainerState
+        $containerIsStarting = Test-WebDavContainerStarting -ComposeOutput $upOut -ContainerState $containerState
+        if ($attempt -lt $WebDavComposeMaxAttempts) {
+            $status = if ($containerState -eq "nicht vorhanden") { "wird noch angelegt" } else { $containerState }
+            Write-Warn "Docker Compose ist beim Versuch $attempt/$WebDavComposeMaxAttempts noch nicht bereit (Status: $status). Neuer Versuch in $WebDavComposeRetryDelaySeconds Sekunden..."
+            Start-Sleep -Seconds $WebDavComposeRetryDelaySeconds
+            continue
+        }
+
+        if (-not $containerIsStarting) {
+            $upOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            Write-WebDavComposeLogs
+            throw "WebDAV Container konnte nach $WebDavComposeMaxAttempts Versuchen nicht gestartet werden."
+        }
+
         $status = if ($containerState -eq "nicht vorhanden") { "wird noch angelegt" } else { $containerState }
-        Write-Warn "Docker erstellt den Container noch (Status: $status). Warte weiter auf WebDAV..."
+        Write-Warn "Docker erstellt den Container nach $WebDavComposeMaxAttempts Versuchen noch (Status: $status). Warte weiter auf WebDAV..."
     }
 
     Write-Host "Warte auf WebDAV (bis zu $WebDavStartupTimeoutMinutes Minuten)" -NoNewline
@@ -400,7 +449,7 @@ function Start-WebDav {
     $fmt = "  {{.Names}} | {{.Status}} | {{.Ports}}"
     docker ps --filter "name=zotero-webdav" --format $fmt 2>&1 |
         Where-Object { $_ } | ForEach-Object { Write-Info $_ }
-    docker compose --env-file .env logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    Write-WebDavComposeLogs
     throw "WebDAV war nach $WebDavStartupTimeoutMinutes Minuten nicht bereit (Container-Status: $containerState)."
 }
 
