@@ -1,5 +1,5 @@
 # Private configuration and runtime state
-.env.local
+.env
 .sync-log.json
 *.log
 

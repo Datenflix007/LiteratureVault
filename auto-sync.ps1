@@ -23,8 +23,8 @@ function Write-Log($Text, $Level = "info") {
 }
 
 function Get-ConfiguredStoragePath {
-    if (Test-Path (Join-Path $ScriptDir ".env.local")) {
-        Get-Content (Join-Path $ScriptDir ".env.local") -Encoding UTF8 | ForEach-Object {
+    if (Test-Path (Join-Path $ScriptDir ".env")) {
+        Get-Content (Join-Path $ScriptDir ".env") -Encoding UTF8 | ForEach-Object {
             if ($_.Trim() -match '^ZOTERO_STORAGE_PATH=(.*)$') { $script:configuredPath = $matches[1].Trim() }
         }
     }

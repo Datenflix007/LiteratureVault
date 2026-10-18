@@ -17,7 +17,7 @@ echo.
 echo [2] WebDAV URL
 echo http://localhost:8080
 echo Benutzer: zotero
-echo Passwort: siehe .env.local oder Standard changeme123
+echo Passwort: siehe .env
 echo.
 
 echo [3] Auto-Sync

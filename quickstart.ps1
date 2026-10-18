@@ -8,6 +8,7 @@ $ProgressPreference = "SilentlyContinue"
 $ScriptDir = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
 Set-Location $ScriptDir
 $script:FirstRun = $false
+$WebDavStartupTimeoutMinutes = 8
 
 # ----------- Helpers -------------------------------------------------
 
@@ -23,8 +24,8 @@ function Write-Warn($Text) { Write-Host "[WARN] $Text" -ForegroundColor Yellow }
 
 function Import-EnvFile {
     $values = [ordered]@{}
-    if (-not (Test-Path ".env.local")) { return $values }
-    Get-Content ".env.local" -Encoding UTF8 | ForEach-Object {
+    if (-not (Test-Path ".env")) { return $values }
+    Get-Content ".env" -Encoding UTF8 | ForEach-Object {
         $line = $_.Trim()
         if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
             $key, $value = $line.Split("=", 2)
@@ -53,8 +54,8 @@ function Get-StoragePath {
 function Ensure-EnvFile {
     Write-Step "[1/7] Projekt einrichten"
 
-    if (Test-Path ".env.local") {
-        Write-Ok ".env.local ist vorhanden"
+    if (Test-Path ".env") {
+        Write-Ok ".env ist vorhanden"
         Import-EnvFile | Out-Null
         return
     }
@@ -99,7 +100,7 @@ function Ensure-EnvFile {
         "ZOTERO_STORAGE_PATH=$storagePath",
         "STORAGE_SHARE_URL=$shareUrl"
     )
-    $lines | Out-File -FilePath '.env.local' -Encoding UTF8 -Force
+    $lines | Out-File -FilePath '.env' -Encoding UTF8 -Force
 
     [Environment]::SetEnvironmentVariable("GITHUB_USERNAME", $githubUser,  "Process")
     [Environment]::SetEnvironmentVariable("GITHUB_EMAIL",    $githubEmail, "Process")
@@ -109,7 +110,7 @@ function Ensure-EnvFile {
     [Environment]::SetEnvironmentVariable("STORAGE_SHARE_URL", $shareUrl, "Process")
     if ($githubUser)  { git config user.name  $githubUser  | Out-Null }
     if ($githubEmail) { git config user.email $githubEmail | Out-Null }
-    Write-Ok ".env.local erstellt und Git-Benutzer gesetzt"
+    Write-Ok ".env erstellt und Git-Benutzer gesetzt"
 }
 
 # ----------- Git pull ------------------------------------------------
@@ -329,6 +330,21 @@ function Get-WebDavContainerState {
     }
 }
 
+function Test-WebDavContainerStarting {
+    param(
+        [object[]]$ComposeOutput,
+        [string]$ContainerState
+    )
+
+    if ($ContainerState -in @("created", "running", "restarting")) { return $true }
+
+    # `docker compose up -d` can return while Docker Desktop still creates the
+    # container. In that short gap, docker inspect may not find it yet even
+    # though Compose already reports "Container zotero-webdav Creating".
+    $outputText = ($ComposeOutput | Out-String)
+    return $outputText -match "(?im)^\\s*Container\\s+zotero-webdav\\s+(Creating|Created|Starting)\\s*$"
+}
+
 function Start-WebDav {
     Write-Step "[6/7] WebDAV Container starten"
 
@@ -354,21 +370,21 @@ function Start-WebDav {
     }
 
     Write-Info "Starte WebDAV Container..."
-    # .env.local is intentionally ignored by Git and must be selected
-    # explicitly; Docker Compose otherwise uses only a file named .env.
-    $upOut = docker compose --env-file .env.local up -d 2>&1
+    # .env is intentionally ignored by Git and contains the local credentials.
+    $upOut = docker compose --env-file .env up -d 2>&1
     if ($LASTEXITCODE -ne 0) {
         $containerState = Get-WebDavContainerState
-        if ($containerState -notin @("created", "running", "restarting")) {
+        if (-not (Test-WebDavContainerStarting -ComposeOutput $upOut -ContainerState $containerState)) {
             $upOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-            docker compose --env-file .env.local logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+            docker compose --env-file .env logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
             throw "WebDAV Container konnte nicht gestartet werden."
         }
-        Write-Warn "Docker erstellt den Container noch (Status: $containerState). Warte auf WebDAV..."
+        $status = if ($containerState -eq "nicht vorhanden") { "wird noch angelegt" } else { $containerState }
+        Write-Warn "Docker erstellt den Container noch (Status: $status). Warte weiter auf WebDAV..."
     }
 
-    Write-Host "Warte auf WebDAV" -NoNewline
-    $deadline = (Get-Date).AddMinutes(2)
+    Write-Host "Warte auf WebDAV (bis zu $WebDavStartupTimeoutMinutes Minuten)" -NoNewline
+    $deadline = (Get-Date).AddMinutes($WebDavStartupTimeoutMinutes)
     while ((Get-Date) -lt $deadline) {
         if (Test-WebDavReady) {
             Write-Host " OK"
@@ -384,8 +400,8 @@ function Start-WebDav {
     $fmt = "  {{.Names}} | {{.Status}} | {{.Ports}}"
     docker ps --filter "name=zotero-webdav" --format $fmt 2>&1 |
         Where-Object { $_ } | ForEach-Object { Write-Info $_ }
-    docker compose --env-file .env.local logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-    throw "WebDAV war nach 2 Minuten nicht bereit (Container-Status: $containerState)."
+    docker compose --env-file .env logs --tail 20 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    throw "WebDAV war nach $WebDavStartupTimeoutMinutes Minuten nicht bereit (Container-Status: $containerState)."
 }
 
 # ----------- Auto-Sync -----------------------------------------------
@@ -472,7 +488,7 @@ catch {
 Write-Host ""
 Write-Host "Fertig! Alle Dienste laufen." -ForegroundColor Green
 Write-Host ""
-Write-Host "  WebDAV:  http://localhost:8080   Benutzer: zotero   Passwort: siehe .env.local"
+Write-Host "  WebDAV:  http://localhost:8080   Benutzer: zotero   Passwort: siehe .env"
 Write-Host "  Speicher: $(Get-StoragePath) (wird nicht in Git/Git LFS gespeichert)"
 Write-Host "  UI:      http://localhost:8765"
 Write-Host ""

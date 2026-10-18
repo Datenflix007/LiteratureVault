@@ -4,15 +4,15 @@ services:
     container_name: zotero-webdav
     restart: unless-stopped
     # Keep Docker's effective credentials in sync with the local setup file.
-    # Compose otherwise loads only .env automatically, not .env.local.
+    # Keep the container credentials in sync with the local, ignored .env file.
     env_file:
-      - .env.local
+      - .env
     ports:
       - "8080:80"
     environment:
       AUTH_TYPE: Basic
     # The host folder is deliberately outside the repository.  Point this at a
-    # folder synced by OneDrive, Nextcloud Desktop or Dropbox (see .env.local).
+    # folder synced by OneDrive, Nextcloud Desktop or Dropbox (see .env).
     volumes:
       - type: bind
         source: ${ZOTERO_STORAGE_PATH:-./data}

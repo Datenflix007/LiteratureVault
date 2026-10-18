@@ -21,16 +21,19 @@ in GitHub und nicht in Git LFS.
 ### 1. Starten
 
 1. Dieses Repository herunterladen oder klonen.
-2. Im Projektordner `quickstart.bat` doppelklicken.
-3. Beim ersten Start Cloud-Anbieter und den lokalen, synchronisierten Ordner
-   eingeben. Den vorgeschlagenen Ordner können Sie mit Enter übernehmen.
-4. Warten, bis `Fertig! Alle Dienste laufen.` erscheint. Danach öffnet sich die
+2. Im Projektordner `.env.example` nach `.env` kopieren, zum Beispiel mit
+   `Copy-Item .env.example .env` in PowerShell.
+3. Nur die lokale `.env` öffnen und die Werte eintragen. Insbesondere benötigen
+   WebDAV-Benutzername und -Passwort sowie `ZOTERO_STORAGE_PATH` einen Wert.
+4. Im Projektordner `quickstart.bat` doppelklicken.
+5. Warten, bis `Fertig! Alle Dienste laufen.` erscheint. Danach öffnet sich die
    Oberfläche unter [http://localhost:8765](http://localhost:8765).
 
-Der erste Docker-Start darf etwas dauern: Das Skript wartet bis zu vier Minuten
-auf Docker Desktop und danach bis zu zwei Minuten auf WebDAV. Währenddessen ist
-`Container zotero-webdav Creating` normal. Erst wenn die Wartezeit abläuft,
-zeigt das Skript Status und letzte Container-Logs als Fehlerhilfe.
+Der erste Docker-Start darf etwas dauern: Das Windows-Skript wartet bis zu vier
+Minuten auf Docker Desktop und danach bis zu acht Minuten auf WebDAV. Währenddessen
+ist `Container zotero-webdav Creating` normal; auch ein asynchrones Erzeugen des
+Containers wird weiter abgewartet. Erst wenn die Wartezeit abläuft, zeigt das
+Skript Status und letzte Container-Logs als Fehlerhilfe.
 
 ### 2. Zotero einmalig verbinden
 
@@ -42,12 +45,13 @@ zeigt das Skript Status und letzte Container-Logs als Fehlerhilfe.
    ```text
    URL:       http://localhost:8080
    Benutzer:  zotero
-   Passwort:  siehe .env.local (beim ersten Start: changeme123)
+   Passwort:  siehe .env
    ```
 4. **Server prüfen** wählen.
 
-Die Datei `.env.local` enthält Ihre lokale Konfiguration und wird nicht in Git
-committet. Ändern Sie `ZOTERO_STORAGE_PATH` nur auf einen tatsächlich lokal
+Kopieren Sie zuerst `.env.example` nach `.env` und tragen Sie die lokalen Werte
+nur in `.env` ein. Diese Datei wird nicht in Git committet. Ändern Sie
+`ZOTERO_STORAGE_PATH` nur auf einen tatsächlich lokal
 verfügbaren und von einem Cloud-Desktop-Client synchronisierten Ordner.
 Der Quickstart legt darin auch den benötigten Unterordner `zotero` an: Zotero
 schreibt seine Anhangsdateien automatisch nach `…/zotero/<Schlüssel>.zip`.
@@ -258,8 +262,9 @@ ihre Daten, Lizenzen und wissenschaftlichen Aussagen.
 
 ## Datenschutz und Git-Grenzen
 
-GitHub enthält nur den Quellcode dieses Repositories. `.gitignore` schützt
-`.env.local`, Laufzeitprotokolle, den lokalen Fallback `data/` und die
+GitHub enthält nur den Quellcode dieses Repositories. `.env.example` enthält
+nur leere Konfigurationsschlüssel; `.gitignore` schützt die lokale `.env`,
+Laufzeitprotokolle, den lokalen Fallback `data/` und die
 generierte XPI-Datei. Zotero-Anhänge, private Forschungsprojektdateien und
 lokale Zugänge gehören ausschließlich in den externen, synchronisierten
 Speicher.

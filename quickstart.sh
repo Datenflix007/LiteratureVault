@@ -19,7 +19,7 @@ step()  { printf '\n\033[36m%s\033[0m\n' "$1"; }
 # ── Env file ─────────────────────────────────────────────────────────
 
 load_env() {
-  [ -f ".env.local" ] || return 0
+  [ -f ".env" ] || return 0
   while IFS='=' read -r key value; do
     [[ "$key" =~ ^# ]] && continue
     [[ -z "$key" ]] && continue
@@ -27,14 +27,14 @@ load_env() {
       GITHUB_USERNAME|GITHUB_EMAIL|GITHUB_TOKEN|WEBDAV_USERNAME|WEBDAV_PASSWORD|WEBDAV_URL|STORAGE_PROVIDER|ZOTERO_STORAGE_PATH|STORAGE_SHARE_URL)
         export "$key=$value" ;;
     esac
-  done < .env.local
+  done < .env
 }
 
 create_env_file() {
   step "[1/7] Projekt einrichten"
 
-  if [ -f ".env.local" ]; then
-    ok ".env.local ist vorhanden"
+  if [ -f ".env" ]; then
+    ok ".env ist vorhanden"
     load_env
     return
   fi
@@ -61,7 +61,7 @@ create_env_file() {
   read -r -p "Optionaler Freigabelink zu diesem Ordner: " share_url_input
   share_url="${share_url_input:-$share_url}"
 
-  cat > .env.local <<EOF
+  cat > .env <<EOF
 # GitHub Configuration
 GITHUB_USERNAME=$github_user
 GITHUB_EMAIL=$github_email
@@ -78,7 +78,7 @@ ZOTERO_STORAGE_PATH=$storage_path
 STORAGE_SHARE_URL=$share_url
 EOF
 
-  chmod 600 .env.local
+  chmod 600 .env
   git config user.name  "$github_user"
   git config user.email "$github_email"
   export GITHUB_USERNAME="$github_user"
@@ -87,7 +87,7 @@ EOF
   export STORAGE_PROVIDER="$provider"
   export ZOTERO_STORAGE_PATH="$storage_path"
   export STORAGE_SHARE_URL="$share_url"
-  ok ".env.local erstellt und Git-Benutzer gesetzt"
+  ok ".env erstellt und Git-Benutzer gesetzt"
 }
 
 # ── Git pull ─────────────────────────────────────────────────────────
@@ -340,6 +340,13 @@ webdav_ready() {
   return 1
 }
 
+webdav_container_starting() {
+  local state
+  state="$("${DOCKER_CMD[@]}" inspect --format '{{.State.Status}}' zotero-webdav 2>/dev/null || true)"
+  case "$state" in created|running|restarting) return 0 ;; esac
+  return 1
+}
+
 start_webdav() {
   step "[6/7] WebDAV Container starten"
 
@@ -350,10 +357,10 @@ start_webdav() {
   info "Externer Speicher: $storage_path"
 
   # Load WebDAV credentials for docker-compose env substitution
-  if [ -f ".env.local" ]; then
+  if [ -f ".env" ]; then
     while IFS='=' read -r key value; do
       case "$key" in WEBDAV_USERNAME|WEBDAV_PASSWORD|ZOTERO_STORAGE_PATH) export "$key=$value" ;; esac
-    done < .env.local
+    done < .env
   fi
 
   # Already healthy?
@@ -363,19 +370,26 @@ start_webdav() {
   fi
 
   info "Starte WebDAV Container..."
-  if ! "${DOCKER_CMD[@]}" compose up -d 2>&1; then
-    # Show logs for diagnosis
-    "${DOCKER_CMD[@]}" compose logs --tail 20 2>&1 || true
-    fail "docker compose up -d fehlgeschlagen. Siehe Logs oben."
+  local up_output
+  if ! up_output="$("${DOCKER_CMD[@]}" compose up -d 2>&1)"; then
+    if ! webdav_container_starting && ! grep -Eqi '^\s*Container\s+zotero-webdav\s+(Creating|Created|Starting)\s*$' <<< "$up_output"; then
+      printf '%s\n' "$up_output"
+      "${DOCKER_CMD[@]}" compose logs --tail 20 2>&1 || true
+      fail "docker compose up -d fehlgeschlagen. Siehe Logs oben."
+    fi
+    warn "Docker erstellt den Container noch. Warte weiter auf WebDAV..."
+  elif [ -n "$up_output" ]; then
+    printf '%s\n' "$up_output"
   fi
 
-  # Wait up to 30s for WebDAV to respond
-  printf 'Warte auf WebDAV'
-  local deadline=$(( $(date +%s) + 30 ))
+  # Image extraction and volume setup can take substantially longer on laptops.
+  printf 'Warte auf WebDAV (bis zu 8 Minuten)'
+  local deadline=$(( $(date +%s) + 480 ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if webdav_ready; then
       echo " OK"
-      break
+      ok "WebDAV laeuft auf http://localhost:8080"
+      return
     fi
     sleep 2
     printf '.'
@@ -383,7 +397,8 @@ start_webdav() {
   echo ""
 
   "${DOCKER_CMD[@]}" ps --filter "name=zotero-webdav" --format "  {{.Names}} | {{.Status}} | {{.Ports}}" 2>/dev/null || true
-  ok "WebDAV laeuft auf http://localhost:8080"
+  "${DOCKER_CMD[@]}" compose logs --tail 20 2>&1 || true
+  fail "WebDAV war nach 8 Minuten nicht bereit. Siehe Container-Status und Logs oben."
 }
 
 # ── Auto-Sync ─────────────────────────────────────────────────────────

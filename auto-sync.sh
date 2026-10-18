@@ -6,8 +6,8 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WATCH_PATH="${1:-}"
 
-if [ -z "$WATCH_PATH" ] && [ -f "$SCRIPT_DIR/.env.local" ]; then
-  WATCH_PATH="$(sed -n 's/^ZOTERO_STORAGE_PATH=//p' "$SCRIPT_DIR/.env.local" | head -n 1)"
+if [ -z "$WATCH_PATH" ] && [ -f "$SCRIPT_DIR/.env" ]; then
+  WATCH_PATH="$(sed -n 's/^ZOTERO_STORAGE_PATH=//p' "$SCRIPT_DIR/.env" | head -n 1)"
 fi
 WATCH_PATH="${WATCH_PATH:-$SCRIPT_DIR/data}"
 case "$WATCH_PATH" in /*) ;; *) WATCH_PATH="$SCRIPT_DIR/$WATCH_PATH" ;; esac

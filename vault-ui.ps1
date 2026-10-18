@@ -11,8 +11,8 @@ Set-Location $ScriptDir
 
 function Import-EnvFile {
     $values = [ordered]@{}
-    if (-not (Test-Path ".env.local")) { return $values }
-    Get-Content ".env.local" -Encoding UTF8 | ForEach-Object {
+    if (-not (Test-Path ".env")) { return $values }
+    Get-Content ".env" -Encoding UTF8 | ForEach-Object {
         $line = $_.Trim()
         if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
             $key, $value = $line.Split("=", 2)
@@ -44,7 +44,7 @@ function Save-EnvFile {
             $lines += "$key=$($Values[$key])"
         }
     }
-    $lines | Out-File ".env.local" -Encoding UTF8 -Force
+    $lines | Out-File ".env" -Encoding UTF8 -Force
 }
 
 function Get-StoragePath {
@@ -1002,7 +1002,7 @@ function Invoke-GitRemote {
 
 function Get-AuthHeaders {
     $env = Import-EnvFile
-    if (-not $env["GITHUB_TOKEN"]) { throw "GITHUB_TOKEN fehlt in .env.local" }
+    if (-not $env["GITHUB_TOKEN"]) { throw "GITHUB_TOKEN fehlt in .env" }
     return @{
         Authorization = "Bearer $($env["GITHUB_TOKEN"])"
         Accept = "application/vnd.github+json"
