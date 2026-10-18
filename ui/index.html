@@ -3,19 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MyLiteratureVault · Forschungs-Workspace</title>
+  <title>LiteratureVault</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <aside class="sidebar" aria-label="Hauptnavigation">
     <div class="brand">
-      <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
-      <div class="brand-copy"><strong>MyLiteratureVault</strong><span id="repoName">Forschungs-Workspace</span></div>
+      <div class="vault-wordmark-wrap">
+        <div class="vault-wordmark" aria-label="Literature Vault">
+          <h1>Literature <span>Vault</span></h1>
+        </div>
+        <p class="sr-only" id="viewEyebrow">FORSCHEN · ORDNEN · SCHREIBEN</p>
+        <p class="sr-only" id="viewTitle">Forschungsübersicht</p>
+        <p class="sr-only" id="statusLine">Lade Speicherstatus …</p>
+      </div>
       <button id="sidebarToggle" class="icon-button" type="button" aria-label="Navigation einklappen" title="Navigation einklappen">←</button>
     </div>
     <nav>
       <button class="nav active" type="button" data-view="overview"><span class="nav-icon">◈</span><span>Übersicht</span></button>
+      <button class="nav" type="button" data-view="research"><span class="nav-icon">⌕</span><span>Recherche</span></button>
       <button class="nav" type="button" data-view="workspace"><span class="nav-icon">▤</span><span>Projekt-Workspace</span></button>
       <button class="nav" type="button" data-view="archive"><span class="nav-icon">□</span><span>Archiv</span></button>
       <button class="nav" type="button" data-view="trash"><span class="nav-icon">⌫</span><span>Papierkorb</span></button>
@@ -34,15 +41,7 @@
   <div class="resize-handle" id="resizeHandle" aria-hidden="true"></div>
 
   <main>
-    <header class="topbar">
-      <div class="vault-wordmark-wrap">
-        <div class="vault-wordmark" aria-label="Literature Vault">
-          <h1>Literature <span>Vault</span></h1>
-        </div>
-        <p class="sr-only" id="viewEyebrow">FORSCHEN · ORDNEN · SCHREIBEN</p>
-        <p class="sr-only" id="viewTitle">Forschungsübersicht</p>
-        <p class="sr-only" id="statusLine">Lade Speicherstatus …</p>
-      </div>
+    <header class="topbar topbar-status">
       <div class="badges" aria-live="polite">
         <span id="zoteroBadge">Zotero wird geprüft</span>
         <span id="storageBadge">Speicher</span>
@@ -51,17 +50,31 @@
     </header>
 
     <section id="overviewView" class="view active">
+      <div class="section-heading">
+        <div><p class="eyebrow">PROJEKTE</p><h2>Aktive Forschungsprojekte</h2><p>Projektdaten bleiben im lokalen, synchronisierten Arbeitsordner. Zotero-Titel werden nur verknüpft.</p></div>
+        <button id="newProjectBtn" type="button" class="primary-btn">Neues Projekt</button>
+      </div>
+      <div id="projectsList" class="project-grid"></div>
+      <section class="repository-graph panel-card" aria-labelledby="repositoryGraphTitle">
+        <header>
+          <div>
+            <p class="eyebrow">CODE-VERLAUF</p>
+            <h2 id="repositoryGraphTitle">Repository-Graph</h2>
+            <p class="hint">Der gesamte lokale Verlauf mit Branches und Merges – unabhängig von einzelnen Forschungsprojekten.</p>
+          </div>
+          <button id="refreshRepositoryGraph" type="button" class="secondary-btn compact">Aktualisieren</button>
+        </header>
+        <div id="repositoryGraph" class="repository-graph-body" aria-live="polite"><p class="repository-graph-loading">Repository-Graph wird geladen …</p></div>
+      </section>
+    </section>
+
+    <section id="researchView" class="view">
       <section class="research-panel panel-card" id="globalResearchPanel">
         <header><div><p class="eyebrow">WISSENSCHAFTLICHE METASUCHE</p><h2>Literatur und Quellen recherchieren</h2><p class="hint">Echte Metadaten aus aktivierten Quellen; institutionell gebundene Portale bleiben klar gekennzeichnet.</p></div></header>
         <form data-research-form="global" class="research-form"><div class="research-query-row"><input name="query" required placeholder="Wissenschaftliche Literatur und Quellen durchsuchen …"><label class="result-limit">Treffer<select name="limit"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label><button class="primary-btn" type="submit">Suchen</button></div><div class="research-provider-list" data-research-providers="global"></div><details><summary>Erweiterte Suche und Filter</summary><div class="form-three"><label>Titel<input name="title"></label><label>Autor:in<input name="author"></label><label>Schlagwörter<input name="keywords"></label><label>DOI<input name="doi"></label><label>ISBN / ISSN<input name="isbn"></label><label>Sprache<input name="language" placeholder="de, en …"></label><label>Von Jahr<input name="fromYear" type="number" min="1000" max="2999"></label><label>Bis Jahr<input name="toYear" type="number" min="1000" max="2999"></label><label>Sortierung<select name="sort"><option value="relevance">Relevanz</option><option value="year-desc">Jahr absteigend</option><option value="year-asc">Jahr aufsteigend</option><option value="title">Titel</option><option value="author">Autor:in</option></select></label></div></details></form>
         <div class="research-status" data-research-status="global">Noch keine Suche ausgeführt.</div><div class="research-results" data-research-results="global"></div>
       </section>
       <div id="savedResearchPanel"></div>
-      <div class="section-heading">
-        <div><p class="eyebrow">PROJEKTE</p><h2>Aktive Forschungsprojekte</h2><p>Projektdaten bleiben im lokalen, synchronisierten Arbeitsordner. Zotero-Titel werden nur verknüpft.</p></div>
-        <button id="newProjectBtn" type="button" class="primary-btn">Neues Projekt</button>
-      </div>
-      <div id="projectsList" class="project-grid"></div>
     </section>
 
     <section id="trashView" class="view">

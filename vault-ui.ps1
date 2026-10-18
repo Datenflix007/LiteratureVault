@@ -1158,6 +1158,15 @@ function Get-GitCommitGraph {
     return @($commits)
 }
 
+function Get-RepositoryGraphPayload {
+    $commits = @(Get-GitCommitGraph)
+    return [PSCustomObject]@{
+        commits = $commits
+        branchCount = @($commits | ForEach-Object { $_.refs } | Where-Object { $_ -and $_ -notmatch '^tag:' } | Select-Object -Unique).Count
+        mergeCount = @($commits | Where-Object { @($_.parents).Count -gt 1 }).Count
+    }
+}
+
 function Get-ProjectHistoryPayload {
     param([string]$ProjectId)
     $project = Get-ProjectById $ProjectId
@@ -1273,6 +1282,7 @@ function Handle-Api {
         if ($method -eq "OPTIONS") { Send-Response $Context 204 "" "text/plain"; return }
         if ($Path -eq "/api/status") { Send-Json $Context (Get-Status); return }
         if ($Path -eq "/api/log") { Send-Json $Context (Get-Log); return }
+        if ($Path -eq "/api/repository-graph" -and $method -eq "GET") { Send-Json $Context (Get-RepositoryGraphPayload); return }
         if ($Path -eq "/api/zotero/status" -and $method -eq "GET") { Send-Json $Context (Get-ZoteroStatus); return }
         if ($Path -eq "/api/zotero/items" -and $method -eq "GET") {
             $limit = 20

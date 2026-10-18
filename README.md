@@ -2,14 +2,10 @@
 
 ![1792278621082](image/README/1792278621082.png)
 
-
-
-
 MyLiteratureVault verbindet Ihre Forschungsprojekte, Zotero und einen lokalen
 WebDAV-Speicher. Literatur, Quellen, Aufgaben und Projektordner bleiben dabei
 auf Ihrem Rechner bzw. in Ihrem bereits synchronisierten Cloud-Ordner – nicht
 in GitHub und nicht in Git LFS.
-
 
 ### Was Sie vorher brauchen
 
@@ -182,7 +178,6 @@ Beim Import werden verfügbare Metadaten sowie Original- und gegebenenfalls
 Volltext-URL übergeben. Bereits vorhandene DOI-Einträge werden wiederverwendet.
 Geschützte PDFs werden weder heruntergeladen noch kopiert; ihre URL bleibt aber
 als Nachweis verfügbar.
-
 
 ### Im Projekt weiterarbeiten
 

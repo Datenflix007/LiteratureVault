@@ -23,7 +23,9 @@ const state = {
   projectHistory: {},
   projectHistoryLoading: {},
   historyScope: {},
-  historySelectedCommit: {}
+  historySelectedCommit: {},
+  repositoryGraph: null,
+  repositoryGraphSelectedCommit: ""
 };
 
 const $ = (id) => document.getElementById(id);
@@ -146,6 +148,7 @@ function setView(name) {
   $(name + "View").classList.add("active");
   const titles = {
     overview: ["FORSCHEN · ORDNEN · SCHREIBEN", "Forschungsübersicht"],
+    research: ["WISSENSCHAFTLICHE METASUCHE", "Recherche"],
     workspace: ["PROJEKT-WORKSPACE", projectById()?.name || "Projekt-Workspace"],
     activity: ["NACHVOLLZIEHBARKEIT", "Code & Speicher-Aktivität"],
     pulls: ["CODE-KOLLABORATION", "Pull Requests"],
@@ -554,6 +557,55 @@ function historyLayout(commits) {
   });
 }
 
+function renderRepositoryGraph() {
+  const target = $("repositoryGraph");
+  const graph = state.repositoryGraph;
+  if (!graph) {
+    target.innerHTML = '<p class="repository-graph-loading">Repository-Graph wird geladen …</p>';
+    return;
+  }
+  const nodes = historyLayout(graph.commits || []);
+  if (!nodes.length) {
+    target.innerHTML = '<p class="repository-graph-loading">In diesem Repository sind noch keine Commits vorhanden.</p>';
+    return;
+  }
+  const nodeByHash = new Map(nodes.map((node) => [node.hash, node]));
+  const selectedHash = nodeByHash.has(state.repositoryGraphSelectedCommit)
+    ? state.repositoryGraphSelectedCommit
+    : nodes[0].hash;
+  const selected = nodeByHash.get(selectedHash);
+  const laneWidth = 36;
+  const rowHeight = 52;
+  const maxLane = Math.max(0, ...nodes.map((node) => node.lane));
+  const graphWidth = Math.max(720, (maxLane + 1) * laneWidth + 590);
+  const graphHeight = Math.max(116, nodes.length * rowHeight + 26);
+  const laneColor = (lane) => 'var(--graph-lane-' + (lane % 5) + ')';
+  const edges = nodes.flatMap((node) => (node.parents || []).map((parentHash) => {
+    const parent = nodeByHash.get(parentHash);
+    if (!parent) return '';
+    const x1 = 28 + node.lane * laneWidth;
+    const y1 = 27 + node.row * rowHeight;
+    const x2 = 28 + parent.lane * laneWidth;
+    const y2 = 27 + parent.row * rowHeight;
+    const bend = Math.max(x1, x2) + 16;
+    return '<path style="--graph-color:' + laneColor(node.lane) + '" d="M ' + x1 + ' ' + y1 + ' C ' + bend + ' ' + y1 + ', ' + bend + ' ' + y2 + ', ' + x2 + ' ' + y2 + '" />';
+  })).join('');
+  const nodeButtons = nodes.map((node) => {
+    const refs = (node.refs || []).map((ref) => '<span class="repository-ref">' + esc(ref) + '</span>').join('');
+    const merge = (node.parents || []).length > 1;
+    return '<button type="button" class="repository-node' + (node.hash === selectedHash ? ' selected' : '') + (merge ? ' merge' : '') + '" data-repository-commit="' + esc(node.hash) + '" style="--repository-x:' + (28 + node.lane * laneWidth) + 'px;--repository-y:' + (27 + node.row * rowHeight) + 'px;--graph-color:' + laneColor(node.lane) + '" title="' + esc(node.hash) + '"><span class="repository-node-dot"></span><span class="repository-node-copy"><strong>' + esc(node.subject || '(ohne Nachricht)') + '</strong><small>' + esc(node.short) + ' · ' + esc(node.author || '') + ' · ' + esc(formatDate(node.date)) + '</small></span>' + (refs ? '<span class="repository-refs">' + refs + '</span>' : '') + '</button>';
+  }).join('');
+  const selectedDetail = selected
+    ? '<div class="repository-selected"><span class="repository-selected-dot" style="--graph-color:' + laneColor(selected.lane) + '"></span><div><span>Ausgewählter Commit</span><strong>' + esc(selected.subject || '(ohne Nachricht)') + '</strong><small>' + esc(selected.short) + ' · ' + esc(selected.author || '') + ' · ' + esc(formatDate(selected.date)) + '</small></div><code>' + esc(selected.hash) + '</code></div>'
+    : '';
+  target.innerHTML = '<div class="repository-summary"><span><strong>' + nodes.length + '</strong> Commits</span><span><strong>' + (graph.branchCount || 0) + '</strong> Referenzen</span><span><strong>' + (graph.mergeCount || 0) + '</strong> Merges</span><span>Lokaler Verlauf</span></div><div class="repository-graph-scroll" tabindex="0" aria-label="Scrollbarer Git-Graph"><div class="repository-graph-canvas" style="width:' + graphWidth + 'px;height:' + graphHeight + 'px"><svg class="repository-edges" viewBox="0 0 ' + graphWidth + ' ' + graphHeight + '" width="' + graphWidth + '" height="' + graphHeight + '" aria-hidden="true">' + edges + '</svg>' + nodeButtons + '</div></div>' + selectedDetail;
+}
+
+async function loadRepositoryGraph() {
+  state.repositoryGraph = await api("/api/repository-graph");
+  renderRepositoryGraph();
+}
+
 function projectHistoryPanel(project) {
   const history = state.projectHistory[project.id];
   const loading = state.projectHistoryLoading[project.id];
@@ -646,7 +698,6 @@ function renderWorkspace() {
     researchQuestionCard +
     '<div class="workspace-metrics compact-metrics"><article><span>Aufgaben</span><strong>' + (project.todoCount || 0) + '</strong><p>' + (project.inProgressTodoCount || 0) + ' in Arbeit · ' + (project.doneTodoCount || 0) + ' erledigt</p></article><article><span>Literatur</span><strong>' + literatureCount + '</strong><p>aus der Zotero-Projektsammlung</p></article><article><span>Quellen</span><strong>' + sourceCount + '</strong><p>aus der Zotero-Projektsammlung</p></article><article><span>Termin</span><strong class="date-metric">' + esc(project.deadline ? formatDate(project.deadline) : "—") + '</strong><p>Projektbrief</p></article></div>' +
     researchConceptEditor(project) +
-    projectHistoryPanel(project) +
     projectResearchPanel(project) +
     '<section class="tasks-panel panel-card"><header><div><p class="eyebrow">LOKALE ISSUES</p><h3>Aufgaben</h3><p class="hint">Jede Aufgabe hat eine lokale Issue-Nummer, Verlauf, Kommentare und Checkliste.</p></div><button type="button" class="primary-btn compact" data-new-task>+ Aufgabe</button></header><div class="task-board">' +
       taskColumn(project, references, "open", "Offen", "Nächster sinnvoller Schritt") + taskColumn(project, references, "in_progress", "In Arbeit", "Gerade im Fokus") + taskColumn(project, references, "blocked", "Blockiert", "Benötigt eine Klärung") + taskColumn(project, references, "done", "Erledigt", "Dokumentierter Fortschritt") +
@@ -686,7 +737,8 @@ async function loadStatus() {
   ]);
   state.zotero = zotero;
   const storage = status.storage || {};
-  $("repoName").textContent = (storage.provider || "lokal") + " · externer Speicher";
+  const repoName = $("repoName");
+  if (repoName) repoName.textContent = (storage.provider || "lokal") + " · externer Speicher";
   $("storageBadge").textContent = storage.available ? (storage.provider || "lokal") + " verbunden" : "Speicher prüfen";
   $("storageBadge").className = storage.available ? "badge-online" : "badge-warning";
   const plugin = zotero.plugin || {};
@@ -1159,6 +1211,8 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-new-task]")) return openTaskDialog();
   const historyCommit = event.target.closest('[data-history-commit]');
   if (historyCommit) { const project = projectById(); if (project) { state.historySelectedCommit[project.id] = historyCommit.dataset.historyCommit; renderWorkspace(); } return; }
+  const repositoryCommit = event.target.closest('[data-repository-commit]');
+  if (repositoryCommit) { state.repositoryGraphSelectedCommit = repositoryCommit.dataset.repositoryCommit; renderRepositoryGraph(); return; }
   const historyScope = event.target.closest('[data-history-scope]');
   if (historyScope) { const project = projectById(); if (project) { state.historyScope[project.id] = historyScope.dataset.historyScope; renderWorkspace(); } return; }
   if (event.target.closest('[data-history-refresh]')) { const project = projectById(); if (project) return loadProjectHistory(project, true).catch((error) => toast(error.message, 'error')); }
@@ -1277,6 +1331,7 @@ $("taskCommentForm").addEventListener("submit", (event) => addTaskComment(event)
 $("issueChecklistForm").addEventListener("submit", (event) => addChecklistItem(event).catch((error) => toast(error.message, "error")));
 $("sourceForm").addEventListener("submit", (event) => saveSourceDialog(event).catch((error) => toast(error.message, "error")));
 $("refreshActivity").addEventListener("click", () => loadActivity().catch((error) => toast(error.message, "error")));
+$("refreshRepositoryGraph").addEventListener("click", () => loadRepositoryGraph().catch((error) => toast(error.message, "error")));
 $("refreshPulls").addEventListener("click", () => loadPulls().catch((error) => toast(error.message, "error")));
 $("settingsBtn").addEventListener("click", () => openSettings().catch((error) => toast(error.message, "error")));
 $("settingsForm").addEventListener("submit", (event) => saveSettings(event).catch((error) => toast(error.message, "error")));
@@ -1306,3 +1361,6 @@ window.setInterval(() => {
 })();
 
 Promise.all([loadStatus(), loadProjects(), loadResearchProviders(), loadSavedResearchResults()]).catch((error) => toast(error.message, "error"));
+loadRepositoryGraph().catch((error) => {
+  $("repositoryGraph").innerHTML = '<p class="repository-graph-loading error-copy">Repository-Graph konnte nicht geladen werden: ' + esc(error.message) + '</p>';
+});
